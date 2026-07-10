@@ -1,17 +1,17 @@
 use std::{borrow::Cow, error::Error, sync::Arc};
 
-use greetd_ipc::{codec::TokioCodec, AuthMessageType, ErrorType, Request, Response};
+use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
 use tokio::sync::{
-  mpsc::{Receiver, Sender},
   Mutex, RwLock,
+  mpsc::{Receiver, Sender},
 };
 
 use crate::{
+  AuthStatus, Greeter, Mode,
   event::Event,
   info::{delete_last_user_command, delete_last_user_session, write_last_user_command, write_last_user_session, write_last_username},
   macros::SafeDebug,
   ui::sessions::{Session, SessionSource, SessionType},
-  AuthStatus, Greeter, Mode,
 };
 
 #[derive(Clone)]
@@ -294,9 +294,9 @@ mod test {
   use std::path::PathBuf;
 
   use crate::{
-    ipc::{desktop_names_to_xdg, DefaultCommand},
-    ui::sessions::{Session, SessionType},
     Greeter,
+    ipc::{DefaultCommand, desktop_names_to_xdg},
+    ui::sessions::{Session, SessionType},
   };
 
   use super::wrap_session_command;

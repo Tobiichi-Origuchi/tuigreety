@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use crossterm::event::{Event as TermEvent, KeyEvent};
-use futures::{future::FutureExt, StreamExt};
+use futures::{StreamExt, future::FutureExt};
 use tokio::{
   process::Command,
   sync::mpsc::{self, Sender},

@@ -19,15 +19,15 @@ use chrono::prelude::*;
 use sessions::SessionSource;
 use tokio::sync::RwLock;
 use tui::{
+  Frame as CrosstermFrame, Terminal,
   layout::{Alignment, Constraint, Direction, Layout},
   style::Modifier,
   text::{Line, Span},
   widgets::Paragraph,
-  Frame as CrosstermFrame, Terminal,
 };
 use util::buttonize;
 
-use crate::{info::capslock_status, ui::util::should_hide_cursor, Greeter, Mode};
+use crate::{Greeter, Mode, info::capslock_status, ui::util::should_hide_cursor};
 
 use self::common::style::{Theme, Themed};
 pub use self::i18n::MESSAGES;
@@ -136,10 +136,8 @@ where
       _ => self::prompt::draw(&mut greeter, f).ok(),
     };
 
-    if !hide_cursor {
-      if let Some(cursor) = cursor {
-        f.set_cursor(cursor.0 - 1, cursor.1 - 1);
-      }
+    if !hide_cursor && let Some(cursor) = cursor {
+      f.set_cursor(cursor.0 - 1, cursor.1 - 1);
     }
   })?;
 

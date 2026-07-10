@@ -1,4 +1,4 @@
-fn_args_density = "Compressed"
-merge_imports = true
+fn_params_layout = "Compressed"
+imports_granularity = "Crate"
 max_width = 200
 tab_spaces = 2

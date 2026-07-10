@@ -133,11 +133,11 @@ impl Session {
 #[cfg(test)]
 mod test {
   use crate::{
+    Greeter,
     ui::{
       common::menu::Menu,
       sessions::{Session, SessionSource, SessionType},
     },
-    Greeter,
   };
 
   #[test]

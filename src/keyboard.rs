@@ -5,6 +5,7 @@ use greetd_ipc::Request;
 use tokio::sync::RwLock;
 
 use crate::{
+  Greeter, Mode,
   info::{delete_last_command, delete_last_session, get_last_user_command, get_last_user_session, write_last_command, write_last_session_path},
   ipc::Ipc,
   power::power,
@@ -13,7 +14,6 @@ use crate::{
     sessions::{Session, SessionSource},
     users::User,
   },
-  Greeter, Mode,
 };
 
 // Act on keyboard events.
@@ -122,43 +122,43 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
 
     // Handle moving up in menus.
     KeyEvent { code: KeyCode::Up, .. } => {
-      if let Mode::Users = greeter.mode {
-        if greeter.users.selected > 0 {
-          greeter.users.selected -= 1;
-        }
+      if let Mode::Users = greeter.mode
+        && greeter.users.selected > 0
+      {
+        greeter.users.selected -= 1;
       }
 
-      if let Mode::Sessions = greeter.mode {
-        if greeter.sessions.selected > 0 {
-          greeter.sessions.selected -= 1;
-        }
+      if let Mode::Sessions = greeter.mode
+        && greeter.sessions.selected > 0
+      {
+        greeter.sessions.selected -= 1;
       }
 
-      if let Mode::Power = greeter.mode {
-        if greeter.powers.selected > 0 {
-          greeter.powers.selected -= 1;
-        }
+      if let Mode::Power = greeter.mode
+        && greeter.powers.selected > 0
+      {
+        greeter.powers.selected -= 1;
       }
     }
 
     // Handle moving down in menus.
     KeyEvent { code: KeyCode::Down, .. } => {
-      if let Mode::Users = greeter.mode {
-        if greeter.users.selected < greeter.users.options.len() - 1 {
-          greeter.users.selected += 1;
-        }
+      if let Mode::Users = greeter.mode
+        && greeter.users.selected < greeter.users.options.len() - 1
+      {
+        greeter.users.selected += 1;
       }
 
-      if let Mode::Sessions = greeter.mode {
-        if greeter.sessions.selected < greeter.sessions.options.len() - 1 {
-          greeter.sessions.selected += 1;
-        }
+      if let Mode::Sessions = greeter.mode
+        && greeter.sessions.selected < greeter.sessions.options.len() - 1
+      {
+        greeter.sessions.selected += 1;
       }
 
-      if let Mode::Power = greeter.mode {
-        if greeter.powers.selected < greeter.powers.options.len() - 1 {
-          greeter.powers.selected += 1;
-        }
+      if let Mode::Power = greeter.mode
+        && greeter.powers.selected < greeter.powers.options.len() - 1
+      {
+        greeter.powers.selected += 1;
       }
     }
 
@@ -249,11 +249,11 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
         let session = greeter.sessions.options.get(greeter.sessions.selected).cloned();
 
         if let Some(Session { path, .. }) = session {
-          if greeter.remember_session {
-            if let Some(ref path) = path {
-              write_last_session_path(path);
-              delete_last_command();
-            }
+          if greeter.remember_session
+            && let Some(ref path) = path
+          {
+            write_last_session_path(path);
+            delete_last_command();
           }
 
           greeter.session_source = SessionSource::Session(greeter.sessions.selected);
@@ -304,7 +304,7 @@ async fn insert_key(greeter: &mut Greeter, c: char) {
   let left = value.chars().take(index);
   let right = value.chars().skip(index);
 
-  let value = left.chain(vec![c].into_iter()).chain(right).collect();
+  let value = left.chain(vec![c]).chain(right).collect();
   let mode = greeter.mode;
 
   match mode {
@@ -364,13 +364,13 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
   greeter.buffer = String::new();
 
   if greeter.remember_user_session {
-    if let Ok(last_session) = get_last_user_session(&greeter.username.value) {
-      if let Some(last_session) = Session::from_path(greeter, last_session).cloned() {
-        tracing::info!("remembered user session is {}", last_session.name);
+    if let Ok(last_session) = get_last_user_session(&greeter.username.value)
+      && let Some(last_session) = Session::from_path(greeter, last_session).cloned()
+    {
+      tracing::info!("remembered user session is {}", last_session.name);
 
-        greeter.sessions.selected = greeter.sessions.options.iter().position(|sess| sess.path == last_session.path).unwrap_or(0);
-        greeter.session_source = SessionSource::Session(greeter.sessions.selected);
-      }
+      greeter.sessions.selected = greeter.sessions.options.iter().position(|sess| sess.path == last_session.path).unwrap_or(0);
+      greeter.session_source = SessionSource::Session(greeter.sessions.selected);
     }
 
     if let Ok(command) = get_last_user_command(&greeter.username.value) {
@@ -390,9 +390,9 @@ mod test {
 
   use super::handle;
   use crate::{
+    Greeter, Mode,
     ipc::Ipc,
     ui::{common::masked::MaskedString, sessions::SessionSource},
-    Greeter, Mode,
   };
 
   #[tokio::test]

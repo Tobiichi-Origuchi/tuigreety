@@ -8,11 +8,11 @@ use tui::{
 };
 
 use crate::{
-  ui::{
-    util::{get_rect_bounds, titleize},
-    Frame,
-  },
   Greeter,
+  ui::{
+    Frame,
+    util::{get_rect_bounds, titleize},
+  },
 };
 
 use super::style::Themed;

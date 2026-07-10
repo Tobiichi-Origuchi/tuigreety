@@ -7,9 +7,8 @@ use tui::{
 };
 
 use crate::{
-  ui::util::*,
-  ui::{prompt_value, Frame},
   Greeter,
+  ui::{Frame, prompt_value, util::*},
 };
 
 use super::common::style::Themed;

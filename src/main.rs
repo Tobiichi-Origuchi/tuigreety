@@ -19,17 +19,17 @@ use std::{error::Error, fs::OpenOptions, io, process, sync::Arc};
 
 use crossterm::{
   execute,
-  terminal::{disable_raw_mode, LeaveAlternateScreen},
+  terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
 use event::Event;
 use greetd_ipc::Request;
 use power::PowerPostAction;
 use tokio::sync::RwLock;
 use tracing_appender::non_blocking::WorkerGuard;
-use tui::{backend::CrosstermBackend, Terminal};
+use tui::{Terminal, backend::CrosstermBackend};
 
 #[cfg(not(test))]
-use crossterm::terminal::{enable_raw_mode, EnterAlternateScreen};
+use crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
@@ -170,8 +170,10 @@ pub fn clear_screen() {
 }
 
 fn init_logger(greeter: &Greeter) -> Option<WorkerGuard> {
-  use tracing_subscriber::filter::{LevelFilter, Targets};
-  use tracing_subscriber::prelude::*;
+  use tracing_subscriber::{
+    filter::{LevelFilter, Targets},
+    prelude::*,
+  };
 
   let logfile = OpenOptions::new().write(true).create(true).append(true).clone();
 

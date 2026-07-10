@@ -2,7 +2,7 @@ use std::{process::Stdio, sync::Arc};
 
 use tokio::{process::Command, sync::RwLock};
 
-use crate::{event::Event, ui::power::Power, Greeter, Mode};
+use crate::{Greeter, Mode, event::Event, ui::power::Power};
 
 #[derive(SmartDefault, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PowerOption {

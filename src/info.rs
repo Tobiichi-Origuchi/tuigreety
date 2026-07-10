@@ -15,12 +15,12 @@ use utmp_rs::{UtmpEntry, UtmpParser};
 use uzers::os::unix::UserExt;
 
 use crate::{
+  Greeter,
   ui::{
     common::masked::MaskedString,
     sessions::{Session, SessionType},
     users::User,
   },
-  Greeter,
 };
 
 const LAST_USER_USERNAME: &str = "/var/cache/tuigreet/lastuser";
@@ -106,11 +106,7 @@ pub fn get_last_user_username() -> Option<String> {
     Some(username) => {
       let username = username.trim();
 
-      if username.is_empty() {
-        None
-      } else {
-        Some(username.to_string())
-      }
+      if username.is_empty() { None } else { Some(username.to_string()) }
     }
   }
 }
@@ -121,11 +117,7 @@ pub fn get_last_user_name() -> Option<String> {
     Some(name) => {
       let name = name.trim();
 
-      if name.is_empty() {
-        None
-      } else {
-        Some(name.to_string())
-      }
+      if name.is_empty() { None } else { Some(name.to_string()) }
     }
   }
 }

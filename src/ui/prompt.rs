@@ -1,6 +1,6 @@
 use std::error::Error;
 
-use rand::{prelude::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, prelude::StdRng};
 use tui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   text::Span,
@@ -8,9 +8,9 @@ use tui::{
 };
 
 use crate::{
-  info::get_hostname,
-  ui::{prompt_value, util::*, Frame},
   GreetAlign, Greeter, Mode, SecretDisplay,
+  info::get_hostname,
+  ui::{Frame, prompt_value, util::*},
 };
 
 use super::common::style::Themed;

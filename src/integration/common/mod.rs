@@ -12,21 +12,21 @@ use libgreetd_stub::SessionOptions;
 use tempfile::NamedTempFile;
 use tokio::{
   sync::{
-    mpsc::{Receiver, Sender},
     RwLock,
+    mpsc::{Receiver, Sender},
   },
   task::{JoinError, JoinHandle},
 };
 use tui::buffer::Buffer;
 
 use crate::{
+  Greeter,
   event::{Event, Events},
   ui::sessions::SessionSource,
-  Greeter,
 };
 
 pub(super) use self::{
-  backend::{output, TestBackend},
+  backend::{TestBackend, output},
   output::*,
 };
 

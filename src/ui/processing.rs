@@ -7,8 +7,8 @@ use tui::{
 };
 
 use crate::{
-  ui::{util::*, Frame},
   Greeter,
+  ui::{Frame, util::*},
 };
 
 pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {

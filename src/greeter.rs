@@ -10,14 +10,14 @@ use std::{
 };
 
 use chrono::{
-  format::{Item, StrftimeItems},
   Locale,
+  format::{Item, StrftimeItems},
 };
 use getopts::{Matches, Options};
 use i18n_embed::DesktopLanguageRequester;
 use tokio::{
   net::UnixStream,
-  sync::{mpsc::Sender, RwLock, RwLockWriteGuard},
+  sync::{RwLock, RwLockWriteGuard, mpsc::Sender},
 };
 use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
@@ -233,10 +233,10 @@ impl Greeter {
 
     let sessions = get_sessions(&greeter).unwrap_or_default();
 
-    if let SessionSource::None = greeter.session_source {
-      if !sessions.is_empty() {
-        greeter.session_source = SessionSource::Session(0);
-      }
+    if let SessionSource::None = greeter.session_source
+      && !sessions.is_empty()
+    {
+      greeter.session_source = SessionSource::Session(0);
     }
 
     greeter.sessions = Menu {
@@ -246,24 +246,24 @@ impl Greeter {
     };
 
     // If we should remember the last logged-in user.
-    if greeter.remember {
-      if let Some(username) = get_last_user_username() {
-        greeter.username = MaskedString::from(username, get_last_user_name());
+    if greeter.remember
+      && let Some(username) = get_last_user_username()
+    {
+      greeter.username = MaskedString::from(username, get_last_user_name());
 
-        // If, on top of that, we should remember their last session.
-        if greeter.remember_user_session {
-          // See if we have the last free-form command from the user.
-          if let Ok(command) = get_last_user_command(greeter.username.get()) {
-            greeter.session_source = SessionSource::Command(command);
-          }
+      // If, on top of that, we should remember their last session.
+      if greeter.remember_user_session {
+        // See if we have the last free-form command from the user.
+        if let Ok(command) = get_last_user_command(greeter.username.get()) {
+          greeter.session_source = SessionSource::Command(command);
+        }
 
-          // If a session was saved, use it and its name.
-          if let Ok(ref session_path) = get_last_user_session(greeter.username.get()) {
-            // Set the selected menu option and the session source.
-            if let Some(index) = greeter.sessions.options.iter().position(|Session { path, .. }| path.as_deref() == Some(session_path)) {
-              greeter.sessions.selected = index;
-              greeter.session_source = SessionSource::Session(greeter.sessions.selected);
-            }
+        // If a session was saved, use it and its name.
+        if let Ok(ref session_path) = get_last_user_session(greeter.username.get()) {
+          // Set the selected menu option and the session source.
+          if let Some(index) = greeter.sessions.options.iter().position(|Session { path, .. }| path.as_deref() == Some(session_path)) {
+            greeter.sessions.selected = index;
+            greeter.session_source = SessionSource::Session(greeter.sessions.selected);
           }
         }
       }
@@ -275,11 +275,11 @@ impl Greeter {
         greeter.session_source = SessionSource::Command(command.trim().to_string());
       }
 
-      if let Ok(ref session_path) = get_last_session_path() {
-        if let Some(index) = greeter.sessions.options.iter().position(|Session { path, .. }| path.as_deref() == Some(session_path)) {
-          greeter.sessions.selected = index;
-          greeter.session_source = SessionSource::Session(greeter.sessions.selected);
-        }
+      if let Ok(ref session_path) = get_last_session_path()
+        && let Some(index) = greeter.sessions.options.iter().position(|Session { path, .. }| path.as_deref() == Some(session_path))
+      {
+        greeter.sessions.selected = index;
+        greeter.session_source = SessionSource::Session(greeter.sessions.selected);
       }
     }
 
@@ -353,10 +353,10 @@ impl Greeter {
   // Returns the width of the main window where content is displayed from the
   // provided arguments.
   pub fn width(&self) -> u16 {
-    if let Some(value) = self.option("width") {
-      if let Ok(width) = value.parse::<u16>() {
-        return width;
-      }
+    if let Some(value) = self.option("width")
+      && let Ok(width) = value.parse::<u16>()
+    {
+      return width;
     }
 
     80
@@ -364,10 +364,10 @@ impl Greeter {
 
   // Returns the padding of the screen from the provided arguments.
   pub fn window_padding(&self) -> u16 {
-    if let Some(value) = self.option("window-padding") {
-      if let Ok(padding) = value.parse::<u16>() {
-        return padding;
-      }
+    if let Some(value) = self.option("window-padding")
+      && let Ok(padding) = value.parse::<u16>()
+    {
+      return padding;
     }
 
     0
@@ -376,10 +376,10 @@ impl Greeter {
   // Returns the padding of the main window where content is displayed from the
   // provided arguments.
   pub fn container_padding(&self) -> u16 {
-    if let Some(value) = self.option("container-padding") {
-      if let Ok(padding) = value.parse::<u16>() {
-        return padding + 1;
-      }
+    if let Some(value) = self.option("container-padding")
+      && let Ok(padding) = value.parse::<u16>()
+    {
+      return padding + 1;
     }
 
     2
@@ -387,10 +387,10 @@ impl Greeter {
 
   // Returns the spacing between each prompt from the provided arguments.
   pub fn prompt_padding(&self) -> u16 {
-    if let Some(value) = self.option("prompt-padding") {
-      if let Ok(padding) = value.parse::<u16>() {
-        return padding;
-      }
+    if let Some(value) = self.option("prompt-padding")
+      && let Ok(padding) = value.parse::<u16>()
+    {
+      return padding;
     }
 
     1
@@ -505,10 +505,10 @@ impl Greeter {
       return Err("Only one of --issue and --greeting may be used at the same time".into());
     }
 
-    if self.config().opt_present("theme") {
-      if let Some(spec) = self.config().opt_str("theme") {
-        self.theme = Theme::parse(spec.as_str());
-      }
+    if self.config().opt_present("theme")
+      && let Some(spec) = self.config().opt_str("theme")
+    {
+      self.theme = Theme::parse(spec.as_str());
     }
 
     if self.config().opt_present("asterisks") {
@@ -661,7 +661,7 @@ fn print_version() {
 
 #[cfg(test)]
 mod test {
-  use crate::{ui::sessions::SessionSource, Greeter, SecretDisplay};
+  use crate::{Greeter, SecretDisplay, ui::sessions::SessionSource};
 
   #[test]
   fn test_prompt_width() {

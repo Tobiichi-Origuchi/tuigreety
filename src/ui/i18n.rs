@@ -1,6 +1,6 @@
 use i18n_embed::{
-  fluent::{fluent_language_loader, FluentLanguageLoader},
   DesktopLanguageRequester, LanguageLoader,
+  fluent::{FluentLanguageLoader, fluent_language_loader},
 };
 use lazy_static::lazy_static;
 use rust_embed::RustEmbed;
