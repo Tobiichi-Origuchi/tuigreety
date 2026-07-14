@@ -143,6 +143,8 @@ pub struct Greeter {
 
   // Whether user menu is enabled.
   pub user_menu: bool,
+  // Whether Tab completion may enumerate eligible usernames.
+  pub user_autocomplete: bool,
   // Menu for user selection.
   pub users: Menu<User>,
   // Current username. Masked to display the full name if available.
@@ -509,16 +511,17 @@ impl Greeter {
       "remember last selected session for each user",
     );
     opts.optflag("", "user-menu", "allow graphical selection of users from a menu");
+    opts.optflag("", "user-autocomplete", "allow Tab completion of usernames");
     opts.optopt(
       "",
       "user-menu-min-uid",
-      "minimum UID to display in the user selection menu",
+      "minimum UID exposed by user menu or completion",
       "UID",
     );
     opts.optopt(
       "",
       "user-menu-max-uid",
-      "maximum UID to display in the user selection menu",
+      "maximum UID exposed by user menu or completion",
       "UID",
     );
     opts.optopt("", "theme", "define the application theme colors", "THEME");
@@ -672,9 +675,10 @@ impl Greeter {
         .ok_or_else(|| format!("--refresh-rate must be between 1 and {MAX_REFRESH_RATE}"))?;
     }
 
-    if self.config().opt_present("user-menu") {
-      self.user_menu = true;
+    self.user_menu = self.config().opt_present("user-menu");
+    self.user_autocomplete = self.config().opt_present("user-autocomplete");
 
+    if self.user_menu || self.user_autocomplete {
       let min_uid = self
         .config()
         .opt_str("user-menu-min-uid")
@@ -697,7 +701,7 @@ impl Greeter {
         selected: 0,
       };
 
-      tracing::info!("found {} users", self.users.options.len());
+      tracing::info!("found {} eligible users", self.users.options.len());
     }
 
     if self.config().opt_present("remember-session") && self.config().opt_present("remember-user-session") {
@@ -1189,6 +1193,11 @@ mod test {
         None,
       ),
       (&["--mock"], true, Some(|greeter| assert!(greeter.mock))),
+      (
+        &["--user-autocomplete"],
+        true,
+        Some(|greeter| assert!(greeter.user_autocomplete)),
+      ),
       (
         &["--refresh-rate", "60"],
         true,

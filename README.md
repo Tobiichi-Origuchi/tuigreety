@@ -45,10 +45,12 @@ Options:
         --remember-user-session
                         remember last selected session for each user
         --user-menu     allow graphical selection of users from a menu
+        --user-autocomplete
+                        allow Tab completion of usernames
         --user-menu-min-uid UID
-                        minimum UID to display in the user selection menu
+                        minimum UID exposed by user menu or completion
         --user-menu-max-uid UID
-                        maximum UID to display in the user selection menu
+                        maximum UID exposed by user menu or completion
         --theme THEME   define the application theme colors
         --asterisks     display asterisks when a secret is typed
         --asterisks-char CHARS
@@ -246,13 +248,15 @@ Note that, by default, all commands are prefixed with `setsid` to completely det
 
 Use `tuigreet --mock` to inspect themes and layout changes without a running greetd service. Mock mode does not require `GREETD_SOCK`; it provides placeholder sessions and simulates the normal username, password, and successful-login flow locally. Selecting a power action exits mock mode without executing a real power command.
 
-### User menu
+### User discovery
 
 Optionally, a user can be selected from a menu instead of typing out their name, with the `--user-menu` option, this will present all users returned by NSS at the time `tuigreet` was run, with a UID within the acceptable range. The values for the minimum and maximum UIDs are selected as follows, for each value:
 
  * A user-provided value, through `--user-menu-min-uid` or `--user-menu-max-uid`;
  * **Or**, the available values for `UID_MIN` or `UID_MAX` from `/etc/login.defs`;
  * **Or**, hardcoded `1000` for minimum UID and `60000` for maximum UID.
+
+`--user-autocomplete` uses the same filtered user set without displaying a list. In the username field, Tab completes a unique match. If several users match, it expands only their shared prefix; if the prefix is already a complete username, Tab submits it as before. User discovery is disabled by default so administrators who treat local usernames as sensitive do not expose them accidentally.
 
 ### Theming
 

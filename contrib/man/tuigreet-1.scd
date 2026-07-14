@@ -83,11 +83,16 @@ tuigreet - A graphical console greeter for greetd
 *--user-menu*
 	Allow selecting a user from a graphical menu.
 
+*--user-autocomplete*
+	Allow Tab completion from the eligible local users. Unique matches are
+	completed; ambiguous matches expand only their common prefix. Disabled by
+	default.
+
 *--user-menu-min-uid*
-	Minimum UID of the users to display in the selection menu.
+	Minimum UID exposed by the user menu or username completion.
 
 *--user-menu-max-uid*
-	Maximum UID of the users to display in the selection menu.
+	Maximum UID exposed by the user menu or username completion.
 
 *-r, --remember*
 	Remember the username of the last successfully opened session, so the

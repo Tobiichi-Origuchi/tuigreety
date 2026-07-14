@@ -209,8 +209,15 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
       ..
     } => greeter.cursor_offset = 0,
 
-    // Tab should validate the username entry (same as Enter).
+    // With completion enabled, Tab completes a unique username or expands a
+    // shared prefix. A second Tab on a complete username submits it, retaining
+    // the original Tab behavior without submitting ambiguous prefixes.
     KeyEvent { code: KeyCode::Tab, .. } => match greeter.mode {
+      Mode::Username if greeter.user_autocomplete => {
+        if complete_username(&mut greeter) == Completion::Exact {
+          validate_username(&mut greeter, &ipc).await;
+        }
+      },
       Mode::Username if !greeter.username.value.is_empty() => validate_username(&mut greeter, &ipc).await,
       _ => {},
     },
@@ -327,6 +334,56 @@ pub async fn handle(greeter: Arc<RwLock<Greeter>>, input: KeyEvent, ipc: Ipc) ->
   Ok(())
 }
 
+#[derive(Debug, Eq, PartialEq)]
+enum Completion {
+  Changed,
+  Exact,
+  None,
+}
+
+fn complete_username(greeter: &mut Greeter) -> Completion {
+  let input = greeter.username.value.as_str();
+  let matches = greeter
+    .users
+    .options
+    .iter()
+    .map(|user| user.username.as_str())
+    .filter(|username| username.starts_with(input))
+    .collect::<Vec<_>>();
+
+  if matches.contains(&input) {
+    return Completion::Exact;
+  }
+
+  let Some(completion) = common_prefix(&matches) else {
+    return Completion::None;
+  };
+
+  if completion == input {
+    return Completion::None;
+  }
+
+  greeter.username.value = completion;
+  greeter.username.mask = None;
+  greeter.cursor_offset = 0;
+  Completion::Changed
+}
+
+fn common_prefix(values: &[&str]) -> Option<String> {
+  let mut prefix = values.first()?.chars().collect::<Vec<_>>();
+
+  for value in &values[1..] {
+    let matching = prefix
+      .iter()
+      .zip(value.chars())
+      .take_while(|(left, right)| left == &right)
+      .count();
+    prefix.truncate(matching);
+  }
+
+  Some(prefix.into_iter().collect())
+}
+
 // Handle insertion of characters into the proper buffer, depending on the
 // current mode and the position of the cursor.
 async fn insert_key(greeter: &mut Greeter, c: char) {
@@ -430,7 +487,7 @@ mod test {
   use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
   use tokio::sync::RwLock;
 
-  use super::handle;
+  use super::{Completion, common_prefix, complete_username, handle};
   use crate::{
     Greeter,
     Mode,
@@ -440,8 +497,56 @@ mod test {
       common::masked::MaskedString,
       power::Power,
       sessions::{Session, SessionSource},
+      users::User,
     },
   };
+
+  #[test]
+  fn username_completion_is_prefix_based() {
+    let mut greeter = Greeter::default();
+    greeter.user_autocomplete = true;
+    greeter.users.options = vec![
+      User {
+        username: "origuchi".into(),
+        name: None,
+      },
+      User {
+        username: "oxxxxxx".into(),
+        name: None,
+      },
+    ];
+
+    greeter.username.value = "o".into();
+    assert_eq!(complete_username(&mut greeter), Completion::None);
+    assert_eq!(greeter.username.value, "o");
+
+    greeter.username.value = "or".into();
+    assert_eq!(complete_username(&mut greeter), Completion::Changed);
+    assert_eq!(greeter.username.value, "origuchi");
+
+    assert_eq!(complete_username(&mut greeter), Completion::Exact);
+
+    greeter.username.value = "nobody".into();
+    assert_eq!(complete_username(&mut greeter), Completion::None);
+  }
+
+  #[test]
+  fn empty_prefix_completes_a_sole_user() {
+    let mut greeter = Greeter::default();
+    greeter.users.options.push(User {
+      username: "origuchi".into(),
+      name: Some("Origuchi".into()),
+    });
+
+    assert_eq!(complete_username(&mut greeter), Completion::Changed);
+    assert_eq!(greeter.username.value, "origuchi");
+    assert!(greeter.username.mask.is_none());
+  }
+
+  #[test]
+  fn common_prefix_handles_characters_not_bytes() {
+    assert_eq!(common_prefix(&["ørlin", "ørjan"]), Some("ør".into()));
+  }
 
   #[tokio::test]
   async fn ctrl_u() {
