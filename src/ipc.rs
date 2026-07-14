@@ -53,9 +53,10 @@ impl Ipc {
       };
 
       let response = {
-        request.write_to(&mut *stream.write().await).await?;
-
-        let response = Response::read_from(&mut *stream.write().await).await?;
+        let mut stream = stream.write().await;
+        request.write_to(&mut *stream).await?;
+        let response = Response::read_from(&mut *stream).await?;
+        drop(stream);
 
         greeter.write().await.working = false;
 
