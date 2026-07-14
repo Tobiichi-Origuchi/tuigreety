@@ -9,6 +9,7 @@ use std::{
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use libgreetd_stub::SessionOptions;
+use ratatui::buffer::Buffer;
 use tempfile::NamedTempFile;
 use tokio::{
   sync::{
@@ -17,7 +18,6 @@ use tokio::{
   },
   task::{JoinError, JoinHandle},
 };
-use tui::buffer::Buffer;
 
 use crate::{
   Greeter,
