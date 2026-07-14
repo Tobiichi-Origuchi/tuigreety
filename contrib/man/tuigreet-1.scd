@@ -132,6 +132,10 @@ tuigreet - A graphical console greeter for greetd
 	Do not prefix power commands with *setsid*, which is used to detach it from
 	current TTY.
 
+*--mock*
+	Run without connecting to greetd and simulate authentication locally for
+	visual inspection. Power actions exit without changing system power state.
+
 *--kb-[command|sessions|power] [1-12]*
 	change the default F-key keybindings to access the command, sessions and power
 	menus.

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error, sync::Arc};
+use std::{borrow::Cow, error::Error, io, sync::Arc};
 
 use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
 use tokio::sync::{
@@ -46,13 +46,13 @@ impl Ipc {
     let request = self.next().await;
 
     if let Some(request) = request {
-      let stream = {
+      let (stream, mock) = {
         let greeter = greeter.read().await;
 
-        greeter.stream.as_ref().unwrap().clone()
+        (greeter.stream.as_ref().map(Arc::clone), greeter.mock)
       };
 
-      let response = {
+      let response = if let Some(stream) = stream {
         let mut stream = stream.write().await;
         request.write_to(&mut *stream).await?;
         let response = Response::read_from(&mut *stream).await?;
@@ -61,6 +61,11 @@ impl Ipc {
         greeter.write().await.working = false;
 
         response
+      } else if mock {
+        greeter.write().await.working = false;
+        mock_response(&request)
+      } else {
+        return Err(io::Error::new(io::ErrorKind::NotConnected, "greetd socket is not connected").into());
       };
 
       self.parse_response(&mut *greeter.write().await, response).await?;
@@ -222,7 +227,21 @@ impl Ipc {
   pub async fn cancel(greeter: &mut Greeter) {
     tracing::info!("cancelling session");
 
+    if greeter.mock {
+      return;
+    }
+
     let _ = Request::CancelSession.write_to(&mut *greeter.stream().await).await;
+  }
+}
+
+fn mock_response(request: &Request) -> Response {
+  match request {
+    Request::CreateSession { .. } => Response::AuthMessage {
+      auth_message_type: AuthMessageType::Secret,
+      auth_message: "Password: ".to_string(),
+    },
+    Request::PostAuthMessageResponse { .. } | Request::StartSession { .. } | Request::CancelSession => Response::Success,
   }
 }
 
@@ -292,15 +311,57 @@ fn wrap_session_command<'a>(greeter: &Greeter, session: Option<&Session>, defaul
 
 #[cfg(test)]
 mod test {
-  use std::path::PathBuf;
+  use std::{path::PathBuf, sync::Arc};
+
+  use greetd_ipc::{AuthMessageType, Request, Response};
+  use tokio::sync::RwLock;
 
   use crate::{
-    Greeter,
+    Greeter, Mode,
     ipc::{DefaultCommand, desktop_names_to_xdg},
     ui::sessions::{Session, SessionType},
   };
 
-  use super::wrap_session_command;
+  use super::{Ipc, mock_response, wrap_session_command};
+
+  #[test]
+  fn mock_responses_follow_authentication_flow() {
+    assert!(matches!(
+      mock_response(&Request::CreateSession { username: "test".into() }),
+      Response::AuthMessage {
+        auth_message_type: AuthMessageType::Secret,
+        ..
+      }
+    ));
+    assert!(matches!(mock_response(&Request::PostAuthMessageResponse { response: Some("secret".into()) }), Response::Success));
+    assert!(matches!(mock_response(&Request::CancelSession), Response::Success));
+  }
+
+  #[tokio::test]
+  async fn mock_ipc_does_not_require_a_socket() {
+    let mut state = Greeter::default();
+    state.mock = true;
+    let greeter = Arc::new(RwLock::new(state));
+    let mut ipc = Ipc::new();
+
+    ipc.send(Request::CreateSession { username: "test".into() }).await;
+    ipc.handle(greeter.clone()).await.unwrap();
+
+    let greeter = greeter.read().await;
+    assert_eq!(greeter.mode, Mode::Password);
+    assert!(greeter.asking_for_secret);
+    assert_eq!(greeter.prompt.as_deref(), Some("Password: "));
+  }
+
+  #[tokio::test]
+  async fn missing_socket_is_not_implicitly_mocked() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let mut ipc = Ipc::new();
+
+    ipc.send(Request::CancelSession).await;
+
+    assert!(ipc.handle(greeter).await.is_err());
+  }
 
   #[test]
   fn wayland_no_wrapper() {

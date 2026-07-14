@@ -173,6 +173,9 @@ pub struct Greeter {
   // Whether to prefix the power commands with `setsid`.
   pub power_setsid: bool,
 
+  // Run without greetd and simulate authentication for visual testing.
+  pub mock: bool,
+
   #[default(2)]
   pub kb_command: u8,
   #[default(3)]
@@ -223,7 +226,11 @@ impl Greeter {
 
     greeter.logger = crate::init_logger(&greeter);
 
-    let sessions = get_sessions(&greeter).unwrap_or_default();
+    let mut sessions = get_sessions(&greeter).unwrap_or_default();
+
+    if greeter.mock && sessions.is_empty() {
+      sessions = mock_sessions();
+    }
 
     if let SessionSource::None = greeter.session_source
       && !sessions.is_empty()
@@ -313,6 +320,11 @@ impl Greeter {
 
   // Connect to `greetd` and return a stream we can safely write to.
   pub async fn connect(&mut self) {
+    if self.mock {
+      tracing::info!("mock mode: skipping greetd socket connection");
+      return;
+    }
+
     if self.socket.is_empty() {
       self.socket = match env::var("GREETD_SOCK") {
         Ok(socket) => socket,
@@ -467,6 +479,7 @@ impl Greeter {
     opts.optopt("", "power-suspend", "command to run to suspend the system", "'CMD [ARGS]...'");
     opts.optopt("", "power-hibernate", "command to run to hibernate the system", "'CMD [ARGS]...'");
     opts.optflag("", "power-no-setsid", "do not prefix power commands with setsid");
+    opts.optflag("", "mock", "run without greetd and simulate authentication for visual testing");
 
     opts.optopt("", "kb-command", "F-key to use to open the command menu", "[1-12]");
     opts.optopt("", "kb-sessions", "F-key to use to open the sessions menu", "[1-12]");
@@ -637,6 +650,7 @@ impl Greeter {
     });
 
     self.power_setsid = !self.config().opt_present("power-no-setsid");
+    self.mock = self.config().opt_present("mock");
 
     self.kb_command = self.config().opt_str("kb-command").map(|i| i.parse::<u8>().unwrap_or_default()).unwrap_or(2);
     self.kb_sessions = self.config().opt_str("kb-sessions").map(|i| i.parse::<u8>().unwrap_or_default()).unwrap_or(3);
@@ -670,6 +684,24 @@ impl Greeter {
       Some(prompt) => prompt.chars().count(),
     }
   }
+}
+
+fn mock_sessions() -> Vec<Session> {
+  [
+    ("mock-wayland", "Mock Wayland", SessionType::Wayland),
+    ("mock-x11", "Mock X11", SessionType::X11),
+    ("mock-shell", "Mock shell", SessionType::None),
+  ]
+  .into_iter()
+  .map(|(slug, name, session_type)| Session {
+    slug: Some(slug.to_string()),
+    name: name.to_string(),
+    command: "true".to_string(),
+    session_type,
+    path: None,
+    xdg_desktop_names: None,
+  })
+  .collect()
 }
 
 fn print_usage(opts: Options) {
@@ -736,7 +768,7 @@ fn print_version() {
 mod test {
   use std::path::PathBuf;
 
-  use super::print_information;
+  use super::{mock_sessions, print_information};
   use crate::{
     Greeter, SecretDisplay,
     ui::sessions::{SessionSource, SessionType},
@@ -787,6 +819,14 @@ mod test {
     assert_eq!(greeter.session_paths.len(), 2);
     assert_eq!(greeter.session_paths[0], (PathBuf::from("/sessions"), SessionType::Wayland));
     assert_eq!(greeter.session_paths[1], (PathBuf::from("/sessions"), SessionType::X11));
+  }
+
+  #[test]
+  fn test_mock_sessions() {
+    let sessions = mock_sessions();
+
+    assert_eq!(sessions.len(), 3);
+    assert!(sessions.iter().all(|session| session.command == "true" && session.path.is_none()));
   }
 
   #[tokio::test]
@@ -868,6 +908,7 @@ mod test {
         }),
       ),
       (&["--user-menu", "--user-menu-min-uid", "70000", "--user-menu-max-uid", "70000"], true, None),
+      (&["--mock"], true, Some(|greeter| assert!(greeter.mock))),
       // Unknown options are ignored
       (&["--asterisk-char", ""], true, None),
       (&["--min-uid", "10000", "--max-uid", "5000"], true, None),

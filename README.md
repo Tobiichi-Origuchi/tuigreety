@@ -65,6 +65,8 @@ Options:
                         command to run to hibernate the system
         --power-no-setsid
                         do not prefix power commands with setsid
+        --mock          run without greetd and simulate authentication for
+                        visual testing
         --kb-command [1-12]
                         F-key to use to open the command menu
         --kb-sessions [1-12]
@@ -226,6 +228,10 @@ command = "tuigreet --power-shutdown 'sudo systemctl poweroff'"
 ```
 
 Note that, by default, all commands are prefixed with `setsid` to completely detach the command from our TTY. If you would prefer to run the commands as is, or if `setsid` does not exist on your system, you can use `--power-no-setsid`.
+
+### Visual mock mode
+
+Use `tuigreet --mock` to inspect themes and layout changes without a running greetd service. Mock mode does not require `GREETD_SOCK`; it provides placeholder sessions and simulates the normal username, password, and successful-login flow locally. Selecting a power action exits mock mode without executing a real power command.
 
 ### User menu
 

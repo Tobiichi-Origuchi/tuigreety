@@ -2,7 +2,7 @@ use std::{fs, path::Path, process::Stdio, sync::Arc};
 
 use tokio::{process::Command, sync::RwLock};
 
-use crate::{Greeter, Mode, event::Event, ui::power::Power};
+use crate::{AuthStatus, Greeter, Mode, event::Event, ui::power::Power};
 
 #[derive(SmartDefault, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PowerOption {
@@ -62,6 +62,13 @@ fn default_command_for(option: PowerOption, root: &Path) -> Option<String> {
 }
 
 pub async fn power(greeter: &mut Greeter, option: PowerOption) {
+  if greeter.mock {
+    if let Some(ref sender) = greeter.events {
+      let _ = sender.send(Event::Exit(AuthStatus::Cancel)).await;
+    }
+    return;
+  }
+
   let command = match greeter.powers.options.iter().find(|opt| opt.action == option) {
     None => None,
 
@@ -188,5 +195,17 @@ mod tests {
     File::create(root.path().join("run/elogind.pid")).unwrap();
 
     assert_eq!(login_manager(root.path()), None);
+  }
+
+  #[tokio::test]
+  async fn mock_power_exits_without_running_a_command() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+    let mut greeter = Greeter::default();
+    greeter.mock = true;
+    greeter.events = Some(sender);
+
+    power(&mut greeter, PowerOption::Shutdown).await;
+
+    assert!(matches!(receiver.recv().await, Some(Event::Exit(AuthStatus::Cancel))));
   }
 }
