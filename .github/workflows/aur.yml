@@ -65,8 +65,9 @@ jobs:
               sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$directory/PKGBUILD"
             fi
             chown -R builder:builder "$directory"
-            runuser -u builder -- sh -c "cd '$directory' && updpkgsums && makepkg --printsrcinfo > .SRCINFO"
+            runuser -u builder -- sh -c "cd '$directory' && updpkgsums"
             runuser -u builder -- sh -c "cd '$directory' && makepkg --cleanbuild --noconfirm"
+            runuser -u builder -- sh -c "cd '$directory' && makepkg --printsrcinfo > .SRCINFO"
           done
       - name: Publish packages
         run: |
