@@ -71,10 +71,6 @@ async fn show_wrapped_greet() {
 
 const TIME_FORMAT: &str = "%Y-%m-%dT%H:%M:%S";
 
-// TODO
-// This could create a race condition if we do not mock time, because we rely on
-// being at the same second between the test instantiation and the tasks
-// running, which is not guaranteed.
 #[tokio::test]
 async fn show_time() {
   let opts = SessionOptions {
@@ -83,7 +79,7 @@ async fn show_time() {
     mfa: false,
   };
 
-  let tref = Local::now().format(TIME_FORMAT).to_string();
+  let time_before_start = Local::now().format(TIME_FORMAT).to_string();
 
   let mut runner = IntegrationRunner::new(
     opts,
@@ -100,13 +96,20 @@ async fn show_time() {
     async move {
       runner.wait_for_render().await;
 
-      assert!(runner.output().await.contains(&tref));
+      let output = runner.output().await;
+      let time_after_render = Local::now().format(TIME_FORMAT).to_string();
+      let rendered_time = if output.contains(&time_before_start) {
+        time_before_start
+      } else {
+        assert!(output.contains(&time_after_render));
+        time_after_render
+      };
 
       tokio::time::sleep(Duration::from_secs(1)).await;
 
       runner.wait_for_render().await;
 
-      assert!(!runner.output().await.contains(&tref));
+      assert!(!runner.output().await.contains(&rendered_time));
     }
   });
 
