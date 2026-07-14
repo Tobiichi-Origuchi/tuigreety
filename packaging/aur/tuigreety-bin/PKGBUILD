@@ -1,7 +1,7 @@
 # Maintainer: Tobiichi Origuchi <Tobiichi-Origuchi@users.noreply.github.com>
 
 pkgname=tuigreety-bin
-pkgver=0.9.1
+pkgver=0.10.0
 pkgrel=1
 pkgdesc='A minimal, configurable console greeter for greetd (prebuilt)'
 arch=('x86_64' 'aarch64' 'armv7h' 'i686')
