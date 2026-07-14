@@ -16,6 +16,10 @@ tuigreet - A graphical console greeter for greetd
 *-v, --version*
 	Print program version and exit.
 
+*--config FILE*
+	Load an explicit TOML configuration file. It overrides the standard system
+	and user files, while individual command-line options override it.
+
 *-d, --debug [FILE]*
 	Enables debug logging to the provided FILE path, or to /tmp/tuigreet.log if no
 	file is specified.
@@ -157,6 +161,19 @@ tuigreet - A graphical console greeter for greetd
 *--kb-[command|sessions|power] [1-12]*
 	change the default F-key keybindings to access the command, sessions and power
 	menus.
+
+# CONFIGURATION
+
+Configuration is loaded from */etc/tuigreet/config.toml*, then from
+*$XDG_CONFIG_HOME/tuigreet/config.toml* or *$HOME/.config/tuigreet/config.toml*.
+An explicit *--config FILE* is applied next, and individual command-line options
+have the highest priority. The environment variables and home directory are
+those of the account running tuigreet.
+
+All fields are optional. Unknown or invalid fields are warned about and ignored
+individually; an invalid TOML document is ignored as a whole. Configuration and
+command-line mistakes do not prevent tuigreet from starting. See the example
+*contrib/tuigreet.toml* distributed with the source for the complete schema.
 
 # AUTHORS
 

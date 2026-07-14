@@ -10,6 +10,7 @@ Usage: tuigreet [OPTIONS]
 Options:
     -h, --help          show this usage information
     -v, --version       print version information
+        --config FILE   load an explicit TOML configuration file
     -d, --debug [FILE]  enable debug logging to the provided file, or to
                         /tmp/tuigreet.log
     -c, --cmd COMMAND   command to run
@@ -176,6 +177,35 @@ $ LD_PRELOAD=/path/to/libnss_wrapper.so cargo test --all-features # To run the w
 ```
 
 ## Configuration
+
+tuigreet reads TOML configuration from these layers, with later layers overriding earlier ones:
+
+1. `/etc/tuigreet/config.toml`
+2. `$XDG_CONFIG_HOME/tuigreet/config.toml`, or `$HOME/.config/tuigreet/config.toml`
+3. The file selected by `--config FILE`
+4. Individual command-line options
+
+`HOME` and `XDG_CONFIG_HOME` belong to the account running tuigreet (normally the greeter account), not the user who is about to log in. All fields are optional. Unknown fields, invalid values, unreadable files, and malformed command-line options produce warnings on standard error and are ignored; valid fields still take effect. A file with invalid TOML syntax is ignored as a whole. This makes a configuration mistake non-fatal, while preserving the previous valid layer or built-in default.
+
+See [`contrib/tuigreet.toml`](contrib/tuigreet.toml) for every supported field and its default. Arrays are used for session directories and environment entries, for example:
+
+```toml
+[session]
+command = "sway"
+environment = ["XDG_CURRENT_DESKTOP=sway"]
+sessions = ["/usr/share/wayland-sessions"]
+
+[display]
+time = true
+refresh-rate = 30
+
+[users]
+autocomplete = true
+```
+
+Commands and environment values in configuration files are not secrets; protect the files appropriately if they contain sensitive data.
+
+### greetd configuration
 
 Edit `/etc/greetd/config.toml` and set the `command` setting to use `tuigreet`:
 

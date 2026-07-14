@@ -1,0 +1,59 @@
+# Every field is optional. These values match tuigreet's defaults.
+[general]
+debug = false
+log-file = "/tmp/tuigreet.log"
+mock = false
+
+[session]
+# command = "sway"
+environment = []
+sessions = []
+xsessions = []
+# wrapper = "dbus-run-session"
+xsession-wrapper = "startx /usr/bin/env" # Set to false to disable it.
+
+[display]
+width = 80
+issue = false
+# greeting = "Welcome"
+time = false
+# time-format = "%Y-%m-%d %H:%M"
+refresh-rate = 2
+# theme = "border=blue;text=white"
+
+[text]
+enabled = false
+# file = "/etc/tuigreet/text.conf"
+
+[remember]
+username = false
+session = false
+user-session = false
+
+[users]
+menu = false
+autocomplete = false
+# min-uid = 1000
+# max-uid = 60000
+
+[secret]
+asterisks = false
+characters = "*"
+
+[layout]
+window-padding = 0
+container-padding = 1
+prompt-padding = 1
+greet-align = "center"
+
+[power]
+# shutdown = "shutdown -h now"
+# reboot = "shutdown -r now"
+# suspend = "systemctl suspend"
+# hibernate = "systemctl hibernate"
+setsid = true
+
+[keybindings]
+command = 2
+sessions = 3
+power = 12
