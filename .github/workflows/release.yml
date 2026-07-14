@@ -91,7 +91,7 @@ jobs:
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'tip' }}
         run: |
-          package="tuigreet-${VERSION}-${{ matrix.name }}"
+          package="tuigreety-${VERSION}-${{ matrix.name }}"
           install -Dm755 "target/${{ matrix.target }}/release/tuigreet" "dist/${package}/bin/tuigreet"
           install -Dm644 contrib/tuigreet.toml "dist/${package}/share/tuigreet/config.toml"
           install -Dm644 contrib/text.conf "dist/${package}/share/tuigreet/text.conf"

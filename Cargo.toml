@@ -1,12 +1,16 @@
 [package]
-name        = "tuigreet"
+name        = "tuigreety"
 version     = "0.9.1"
 description = "A console greeter for greetd"
 license     = "GPL-3.0-or-later"
-repository  = "https://github.com/Tobiichi-Origuchi/tuigreet"
+repository  = "https://github.com/Tobiichi-Origuchi/tuigreety"
 readme      = "README.md"
 edition     = "2024"
 build       = "build.rs"
+
+[[bin]]
+name = "tuigreet"
+path = "src/main.rs"
 
 [features]
 default    = [  ]

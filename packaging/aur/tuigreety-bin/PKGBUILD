@@ -10,10 +10,10 @@ license=('GPL-3.0-or-later')
 provides=('greetd-greeter' "tuigreety=$pkgver")
 conflicts=('greetd-tuigreet' 'tuigreety' 'tuigreety-git')
 depends=('glibc' 'greetd' 'libgcc' 'systemd')
-source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/tuigreet-$pkgver-x86_64.tar.gz")
-source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/$pkgver/tuigreet-$pkgver-aarch64.tar.gz")
-source_armv7h=("$pkgname-$pkgver-armv7.tar.gz::$url/releases/download/$pkgver/tuigreet-$pkgver-armv7.tar.gz")
-source_i686=("$pkgname-$pkgver-i686.tar.gz::$url/releases/download/$pkgver/tuigreet-$pkgver-i686.tar.gz")
+source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-x86_64.tar.gz")
+source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-aarch64.tar.gz")
+source_armv7h=("$pkgname-$pkgver-armv7.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-armv7.tar.gz")
+source_i686=("$pkgname-$pkgver-i686.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-i686.tar.gz")
 source=('tuigreet.conf')
 sha256sums=('SKIP')
 sha256sums_x86_64=('SKIP')
@@ -24,7 +24,7 @@ sha256sums_i686=('SKIP')
 package() {
   local release_arch="$CARCH"
   [[ $CARCH == armv7h ]] && release_arch=armv7
-  cd "tuigreet-$pkgver-$release_arch"
+  cd "tuigreety-$pkgver-$release_arch"
   install -Dm755 bin/tuigreet "$pkgdir/usr/bin/tuigreet"
   install -Dm644 share/man/man1/tuigreet.1 "$pkgdir/usr/share/man/man1/tuigreet.1"
   install -Dm644 share/tuigreet/config.toml "$pkgdir/usr/share/doc/$pkgname/examples/config.toml"

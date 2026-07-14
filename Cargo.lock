@@ -1391,7 +1391,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "tuigreet"
+name = "tuigreety"
 version = "0.9.1"
 dependencies = [
  "ansi-to-tui",

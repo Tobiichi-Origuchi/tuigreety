@@ -180,12 +180,12 @@ command-line mistakes do not prevent tuigreet from starting. See the example
 Maintained by the tuigreet contributors.
 
 Contributor history is available at
-https://github.com/Tobiichi-Origuchi/tuigreet/graphs/contributors.
+https://github.com/Tobiichi-Origuchi/tuigreety/graphs/contributors.
 
 # DEVELOPMENT
 
 Issue reporting and development discussion should happen at
-https://github.com/Tobiichi-Origuchi/tuigreet.
+https://github.com/Tobiichi-Origuchi/tuigreety.
 
 # SEE ALSO
 

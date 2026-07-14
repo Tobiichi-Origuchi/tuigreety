@@ -1,6 +1,6 @@
-# tuigreet
+# tuigreety
 
-Graphical console greeter for [greetd](https://git.sr.ht/~kennylevinsen/greetd).
+A minimal, configurable console greeter for [greetd](https://git.sr.ht/~kennylevinsen/greetd). The project and package are named `tuigreety`; the installed executable remains `tuigreet` for compatibility with existing greetd configurations.
 
 ![Screenshot of tuigreet](contrib/screenshot.png)
 
@@ -102,7 +102,7 @@ You may change the command that will be executed after opening a session by hitt
 Building from source requires an installation of Rust's `stable` toolchain, including `cargo`.
 
 ```
-$ git clone https://github.com/Tobiichi-Origuchi/tuigreet && cd tuigreet
+$ git clone https://github.com/Tobiichi-Origuchi/tuigreety && cd tuigreety
 $ cargo build --release
 # mv target/release/tuigreet /usr/local/bin/tuigreet
 ```
@@ -118,48 +118,17 @@ Cache directory must be created for `--remember*` features to work. The director
 
 ### From Arch Linux
 
-On ArchLinux, `tuigreet` is available from the [extra](https://archlinux.org/packages/extra/x86_64/greetd-tuigreet/) repo and is installable through pacman:
+The original project remains available from Arch Linux's official repositories as `greetd-tuigreet`. This fork is published to the AUR in three variants:
 
-```
-$ pacman -S greetd-tuigreet
-```
+- `tuigreety` builds the latest tagged release locally.
+- `tuigreety-bin` installs the prebuilt release binary.
+- `tuigreety-git` builds the latest `master` revision.
 
-Two more distributions are available from the [AUR](https://aur.archlinux.org/packages?O=0&K=tuigreet): `greetd-tuigreet-bin` is the precompiled release for the latest tagged release of `tuigreet` and `greetd-tuigreet-git` is a rolling release always following the `master` branch of this repository.
-Those can be installed via your preferred AUR helper.
-
-### From Gentoo
-
-On Gentoo, `tuigreet` is available as a package `gui-apps/tuigreet`:
-
-```
-$ emerge --ask --verbose gui-apps/tuigreet
-```
-
-### From NixOS
-
-On NixOS `greetd` and `tuigreet` both available via `<nixpkgs>` main repository.
-Please refer to the snippet below for the minimal `tuigreet` configuration:
-
-```nix
-{ pkgs, ... }:
-{
-  services.greetd = {
-    enable = true;
-    settings = {
-      default_session = {
-        command = "${pkgs.greetd.tuigreet}/bin/tuigreet --time --cmd sway";
-        user = "greeter";
-      };
-    };
-  };
-}
-```
-
-[More details](https://search.nixos.org/options?channel=unstable&show=services.greetd.settings&from=0&size=50&sort=relevance&query=greetd)
+All three install `/usr/bin/tuigreet`, provide `greetd-greeter`, and conflict with `greetd-tuigreet` and each other.
 
 ### Pre-built binaries
 
-Pre-built packages can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreet/releases) section of this repository. Each package includes the binary, man page, license, README, and complete examples for the TOML and text configuration files. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreet/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
+Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each package includes the binary, man page, license, README, and complete examples for the TOML and text configuration files. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
 ## Running the tests
 
