@@ -42,11 +42,17 @@ jobs:
           chown -R builder:builder "$GITHUB_WORKSPACE"
           install -d -m700 -o builder -g builder /home/builder/.ssh
           install -m600 -o builder -g builder /dev/null /home/builder/.ssh/aur
-          echo "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
+          printf '%s\n' "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
+          cat > /home/builder/.ssh/config <<'EOF'
+          Host aur.archlinux.org
+            User aur
+            IdentityFile ~/.ssh/aur
+            IdentitiesOnly yes
+          EOF
           ssh-keyscan -t ed25519 aur.archlinux.org > /home/builder/.ssh/known_hosts
           test "$(ssh-keygen -lf /home/builder/.ssh/known_hosts -E sha256 | awk '{print $2}')" = 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4'
-          chown builder:builder /home/builder/.ssh/known_hosts
-          chmod 600 /home/builder/.ssh/known_hosts
+          chown builder:builder /home/builder/.ssh/config /home/builder/.ssh/known_hosts
+          chmod 600 /home/builder/.ssh/config /home/builder/.ssh/known_hosts
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           runuser -u builder -- git config --global user.name 'Tobiichi Origuchi'
           runuser -u builder -- git config --global user.email 'Tobiichi-Origuchi@users.noreply.github.com'
