@@ -209,14 +209,6 @@ impl Greeter {
 
     #[cfg(not(test))]
     {
-      match env::var("GREETD_SOCK") {
-        Ok(socket) => greeter.socket = socket,
-        Err(_) => {
-          eprintln!("GREETD_SOCK must be defined");
-          process::exit(1);
-        }
-      }
-
       let args = env::args().collect::<Vec<String>>();
 
       if let Err(err) = greeter.parse_options(&args).await {
@@ -321,6 +313,16 @@ impl Greeter {
 
   // Connect to `greetd` and return a stream we can safely write to.
   pub async fn connect(&mut self) {
+    if self.socket.is_empty() {
+      self.socket = match env::var("GREETD_SOCK") {
+        Ok(socket) => socket,
+        Err(_) => {
+          eprintln!("GREETD_SOCK must be defined");
+          process::exit(1);
+        }
+      };
+    }
+
     match UnixStream::connect(&self.socket).await {
       Ok(stream) => self.stream = Some(Arc::new(RwLock::new(stream))),
 
@@ -664,6 +666,21 @@ fn print_usage(opts: Options) {
   eprint!("{}", opts.usage("Usage: tuigreet [OPTIONS]"));
 }
 
+pub fn print_information<S>(args: &[S]) -> bool
+where
+  S: AsRef<OsStr>,
+{
+  if args.iter().any(|arg| matches!(arg.as_ref().to_str(), Some("-h" | "--help"))) {
+    print_usage(Greeter::options());
+    true
+  } else if args.iter().any(|arg| matches!(arg.as_ref().to_str(), Some("-v" | "--version"))) {
+    print_version();
+    true
+  } else {
+    false
+  }
+}
+
 fn parse_options_ignoring_unknown<S>(opts: &Options, args: &[S]) -> Result<Matches, Fail>
 where
   S: AsRef<OsStr>,
@@ -707,6 +724,7 @@ fn print_version() {
 
 #[cfg(test)]
 mod test {
+  use super::print_information;
   use crate::{Greeter, SecretDisplay, ui::sessions::SessionSource};
 
   #[test]
@@ -736,6 +754,13 @@ mod test {
     greeter.remove_prompt();
 
     assert_eq!(greeter.prompt, None);
+  }
+
+  #[test]
+  fn test_information_options() {
+    assert!(print_information(&["tuigreet", "--help"]));
+    assert!(print_information(&["tuigreet", "-v"]));
+    assert!(!print_information(&["tuigreet", "--time"]));
   }
 
   #[tokio::test]

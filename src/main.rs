@@ -15,7 +15,7 @@ mod ui;
 #[cfg(test)]
 mod integration;
 
-use std::{error::Error, fs::OpenOptions, io, process, sync::Arc};
+use std::{env, error::Error, fs::OpenOptions, io, process, sync::Arc};
 
 use crossterm::{
   execute,
@@ -36,6 +36,11 @@ use self::{event::Events, ipc::Ipc};
 
 #[tokio::main]
 async fn main() {
+  let args = env::args().collect::<Vec<_>>();
+  if print_information(&args) {
+    return;
+  }
+
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
   let greeter = Greeter::new(events.sender()).await;
