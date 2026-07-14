@@ -546,8 +546,8 @@ impl Greeter {
 
       tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
 
-      if min_uid >= max_uid {
-        return Err("Minimum UID ({min_uid}) must be less than maximum UID ({max_uid})".into());
+      if min_uid > max_uid {
+        return Err("Minimum UID ({min_uid}) must not exceed maximum UID ({max_uid})".into());
       }
 
       self.users = Menu {
@@ -816,6 +816,7 @@ mod test {
           assert_eq!(greeter.powers.options[3].command.as_deref(), Some("do-hibernate"));
         }),
       ),
+      (&["--user-menu", "--user-menu-min-uid", "424242", "--user-menu-max-uid", "424242"], true, None),
       // Unknown options are ignored
       (&["--asterisk-char", ""], true, None),
       (&["--min-uid", "10000", "--max-uid", "5000"], true, None),
