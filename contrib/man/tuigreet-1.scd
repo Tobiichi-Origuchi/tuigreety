@@ -177,15 +177,15 @@ command-line mistakes do not prevent tuigreet from starting. See the example
 
 # AUTHORS
 
-Maintained by Antoine POPINEAU <antoine@popineau.eu>.
+Maintained by the tuigreet contributors.
 
-Contributed to by great people at
-https://github.com/apognu/tuigreet/graphs/contributors.
+Contributor history is available at
+https://github.com/Tobiichi-Origuchi/tuigreet/graphs/contributors.
 
 # DEVELOPMENT
 
 Issue reporting and development discussion should happen at
-https://github.com/apognu/tuigreet.
+https://github.com/Tobiichi-Origuchi/tuigreet.
 
 # SEE ALSO
 

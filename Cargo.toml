@@ -1,9 +1,12 @@
 [package]
-name    = "tuigreet"
-version = "0.9.1"
-authors = [ "Antoine POPINEAU <antoine@popineau.eu>" ]
-edition = "2024"
-build   = "build.rs"
+name        = "tuigreet"
+version     = "0.9.1"
+description = "A console greeter for greetd"
+license     = "GPL-3.0-or-later"
+repository  = "https://github.com/Tobiichi-Origuchi/tuigreet"
+readme      = "README.md"
+edition     = "2024"
+build       = "build.rs"
 
 [features]
 default    = [  ]

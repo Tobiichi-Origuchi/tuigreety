@@ -2,7 +2,7 @@
 
 Graphical console greeter for [greetd](https://git.sr.ht/~kennylevinsen/greetd).
 
-![Screenshot of tuigreet](https://github.com/apognu/tuigreet/blob/master/contrib/screenshot.png)
+![Screenshot of tuigreet](contrib/screenshot.png)
 
 ```
 Usage: tuigreet [OPTIONS]
@@ -102,7 +102,7 @@ You may change the command that will be executed after opening a session by hitt
 Building from source requires an installation of Rust's `stable` toolchain, including `cargo`.
 
 ```
-$ git clone https://github.com/apognu/tuigreet && cd tuigreet
+$ git clone https://github.com/Tobiichi-Origuchi/tuigreet && cd tuigreet
 $ cargo build --release
 # mv target/release/tuigreet /usr/local/bin/tuigreet
 ```
@@ -159,7 +159,7 @@ Please refer to the snippet below for the minimal `tuigreet` configuration:
 
 ### Pre-built binaries
 
-Pre-built binaries of `tuigreet` for several architectures can be found in the [releases](https://github.com/apognu/tuigreet/releases) section of this repository. The [tip prerelease](https://github.com/apognu/tuigreet/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
+Pre-built packages can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreet/releases) section of this repository. Each package includes the binary, man page, license, README, and complete examples for the TOML and text configuration files. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreet/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
 ## Running the tests
 
@@ -311,4 +311,4 @@ Please note that we can only render colors as supported by the running terminal.
 
 Below is a screenshot of the greeter with the following theme applied: `border=magenta;text=cyan;prompt=green;time=red;action=blue;button=yellow;container=black;input=red`:
 
-![Screenshot of tuigreet](https://github.com/apognu/tuigreet/blob/master/contrib/screenshot-themed.png)
+![Screenshot of tuigreet](contrib/screenshot-themed.png)
