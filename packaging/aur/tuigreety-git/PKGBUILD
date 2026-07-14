@@ -16,7 +16,7 @@ sha256sums=('SKIP' 'SKIP')
 
 pkgver() {
   cd tuigreety
-  git describe --long --tags --always | sed 's/^v//;s/-/.r/;s/-/./'
+  git describe --long --tags --match '[0-9]*.[0-9]*.[0-9]*' --always | sed 's/^v//;s/-/.r/;s/-/./'
 }
 
 prepare() {
