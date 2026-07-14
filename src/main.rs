@@ -135,7 +135,12 @@ where
       Some(Event::Render) => {
         ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
       },
-      Some(Event::Key(key)) => keyboard::handle(greeter.clone(), key, ipc.clone()).await?,
+      Some(Event::Key(key)) => {
+        let requested_exit = keyboard::handle(greeter.clone(), key, ipc.clone()).await?;
+        if let Some(status) = requested_exit {
+          crate::exit(&mut *greeter.write().await, status).await;
+        }
+      },
 
       Some(Event::Exit(status)) => {
         crate::exit(&mut *greeter.write().await, status).await;
