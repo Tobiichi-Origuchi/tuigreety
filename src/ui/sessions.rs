@@ -168,7 +168,7 @@ mod test {
 
     let session = Session::from_path(&greeter, "/Session2Path");
 
-    assert!(matches!(session, Some(_)));
+    assert!(session.is_some());
     assert_eq!(session.unwrap().name, "Session2");
     assert_eq!(session.unwrap().session_type, SessionType::X11);
   }
@@ -192,14 +192,14 @@ mod test {
 
     let session = Session::from_path(&greeter, "/Session2Path");
 
-    assert!(matches!(session, None));
+    assert!(session.is_none());
   }
 
   #[test]
   fn no_session() {
     let greeter = Greeter::default();
 
-    assert!(matches!(Session::get_selected(&greeter), None));
+    assert!(Session::get_selected(&greeter).is_none());
   }
 
   #[test]
@@ -230,7 +230,7 @@ mod test {
 
     let session = Session::get_selected(&greeter);
 
-    assert!(matches!(session, Some(_)));
+    assert!(session.is_some());
     assert_eq!(session.unwrap().name, "Session2");
     assert_eq!(session.unwrap().session_type, SessionType::X11);
   }
@@ -263,7 +263,7 @@ mod test {
 
     let session = Session::get_selected(&greeter);
 
-    assert!(matches!(session, Some(_)));
+    assert!(session.is_some());
     assert_eq!(session.unwrap().name, "Session");
     assert_eq!(session.unwrap().session_type, SessionType::X11);
     assert_eq!(session.unwrap().command, "Session2Cmd");

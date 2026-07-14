@@ -352,7 +352,6 @@ mod test {
       command: "Session1Cmd".into(),
       path: Some(PathBuf::from("/Session1Path")),
       xdg_desktop_names: Some("one;two;three;".to_string()),
-      ..Default::default()
     };
 
     let default = DefaultCommand(&session.command, None);

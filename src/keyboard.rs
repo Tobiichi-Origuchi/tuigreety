@@ -410,7 +410,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.username.value, "".to_string());
     }
 
@@ -425,7 +425,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.buffer, "".to_string());
     }
 
@@ -440,7 +440,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.buffer, "".to_string());
     }
   }
@@ -463,10 +463,10 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.mode, Mode::Username);
       assert_eq!(status.buffer, "apognu".to_string());
-      assert!(matches!(status.previous_buffer, None));
+      assert!(status.previous_buffer.is_none());
       assert_eq!(status.cursor_offset, 0);
     }
 
@@ -482,7 +482,7 @@ mod test {
       {
         let status = greeter.read().await;
 
-        assert!(matches!(result, Ok(_)));
+        assert!(result.is_ok());
         assert_eq!(status.mode, Mode::Username);
       }
     }
@@ -497,7 +497,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.cursor_offset, -1);
     }
 
@@ -507,7 +507,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.cursor_offset, 1);
     }
   }
@@ -528,7 +528,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.mode, Mode::Command);
       assert_eq!(status.previous_buffer, Some("apognu".to_string()));
       assert_eq!(status.buffer, "thecommand".to_string());
@@ -546,7 +546,7 @@ mod test {
       {
         let status = greeter.read().await;
 
-        assert!(matches!(result, Ok(_)));
+        assert!(result.is_ok());
         assert_eq!(status.mode, Mode::Command);
         assert_eq!(status.previous_mode, Mode::Username);
       }
@@ -569,7 +569,7 @@ mod test {
       {
         let status = greeter.read().await;
 
-        assert!(matches!(result, Ok(_)));
+        assert!(result.is_ok());
         assert_eq!(status.mode, mode);
         assert_eq!(status.buffer, "apognu".to_string());
       }
@@ -586,7 +586,7 @@ mod test {
         {
           let status = greeter.read().await;
 
-          assert!(matches!(result, Ok(_)));
+          assert!(result.is_ok());
           assert_eq!(status.mode, Mode::Command);
           assert_eq!(status.previous_mode, Mode::Username);
         }
@@ -613,7 +613,7 @@ mod test {
       {
         let status = greeter.read().await;
 
-        assert!(matches!(result, Ok(_)));
+        assert!(result.is_ok());
         assert_eq!(status.mode, mode);
         assert_eq!(status.buffer, "apognu".to_string());
       }
@@ -630,7 +630,7 @@ mod test {
         {
           let status = greeter.read().await;
 
-          assert!(matches!(result, Ok(_)));
+          assert!(result.is_ok());
           assert_eq!(status.mode, Mode::Command);
           assert_eq!(status.previous_mode, Mode::Username);
         }
@@ -653,7 +653,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.cursor_offset, -9);
     }
 
@@ -662,7 +662,7 @@ mod test {
     {
       let status = greeter.read().await;
 
-      assert!(matches!(result, Ok(_)));
+      assert!(result.is_ok());
       assert_eq!(status.cursor_offset, 0);
     }
   }

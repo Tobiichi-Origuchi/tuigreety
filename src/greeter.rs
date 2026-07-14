@@ -693,7 +693,7 @@ fn option_has_name(arg: &OsStr, name: &str) -> bool {
     return long.split_once('=').map_or(long, |(name, _)| name) == name;
   }
 
-  name.chars().count() == 1 && arg.strip_prefix('-').is_some_and(|shorts| shorts.chars().any(|short| name.chars().next() == Some(short)))
+  name.chars().count() == 1 && arg.strip_prefix('-').is_some_and(|shorts| shorts.chars().any(|short| name.starts_with(short)))
 }
 
 fn print_version() {
@@ -740,7 +740,9 @@ mod test {
 
   #[tokio::test]
   async fn test_command_line_arguments() {
-    let table: &[(&[&str], _, Option<fn(&Greeter)>)] = &[
+    type Case<'a> = (&'a [&'a str], bool, Option<fn(&Greeter)>);
+
+    let table: &[Case<'_>] = &[
       // No arguments
       (&[], true, None),
       // Valid combinations
@@ -788,7 +790,7 @@ mod test {
           assert_eq!(greeter.prompt_padding(), 0);
           assert_eq!(greeter.window_padding(), 1);
           assert_eq!(greeter.container_padding(), 13);
-          assert_eq!(greeter.user_menu, true);
+          assert!(greeter.user_menu);
           assert!(matches!(greeter.xsession_wrapper.as_deref(), Some("startx /usr/bin/env")));
         }),
       ),
@@ -803,7 +805,7 @@ mod test {
         &["--no-xsession-wrapper"],
         true,
         Some(|greeter| {
-          assert!(matches!(greeter.xsession_wrapper, None));
+          assert!(greeter.xsession_wrapper.is_none());
         }),
       ),
       (
@@ -832,13 +834,13 @@ mod test {
 
       match valid {
         true => {
-          assert!(matches!(greeter.parse_options(*opts).await, Ok(())), "{:?} cannot be parsed", opts);
+          assert!(matches!(greeter.parse_options(opts).await, Ok(())), "{:?} cannot be parsed", opts);
 
           if let Some(check) = check {
             check(&greeter);
           }
         }
-        false => assert!(matches!(greeter.parse_options(*opts).await, Err(_))),
+        false => assert!(greeter.parse_options(opts).await.is_err()),
       }
     }
   }
