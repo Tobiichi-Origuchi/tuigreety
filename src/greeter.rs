@@ -462,6 +462,8 @@ impl Greeter {
 
     opts.optopt("", "power-shutdown", "command to run to shut down the system", "'CMD [ARGS]...'");
     opts.optopt("", "power-reboot", "command to run to reboot the system", "'CMD [ARGS]...'");
+    opts.optopt("", "power-suspend", "command to run to suspend the system", "'CMD [ARGS]...'");
+    opts.optopt("", "power-hibernate", "command to run to hibernate the system", "'CMD [ARGS]...'");
     opts.optflag("", "power-no-setsid", "do not prefix power commands with setsid");
 
     opts.optopt("", "kb-command", "F-key to use to open the command menu", "[1-12]");
@@ -607,13 +609,25 @@ impl Greeter {
     self.powers.options.push(Power {
       action: PowerOption::Shutdown,
       label: fl!("shutdown"),
-      command: self.config().opt_str("power-shutdown"),
+      command: self.config().opt_str("power-shutdown").or_else(|| crate::power::default_command(PowerOption::Shutdown)),
     });
 
     self.powers.options.push(Power {
       action: PowerOption::Reboot,
       label: fl!("reboot"),
-      command: self.config().opt_str("power-reboot"),
+      command: self.config().opt_str("power-reboot").or_else(|| crate::power::default_command(PowerOption::Reboot)),
+    });
+
+    self.powers.options.push(Power {
+      action: PowerOption::Suspend,
+      label: fl!("suspend"),
+      command: self.config().opt_str("power-suspend").or_else(|| crate::power::default_command(PowerOption::Suspend)),
+    });
+
+    self.powers.options.push(Power {
+      action: PowerOption::Hibernate,
+      label: fl!("hibernate"),
+      command: self.config().opt_str("power-hibernate").or_else(|| crate::power::default_command(PowerOption::Hibernate)),
     });
 
     self.power_setsid = !self.config().opt_present("power-no-setsid");
@@ -790,6 +804,14 @@ mod test {
         true,
         Some(|greeter| {
           assert!(matches!(greeter.xsession_wrapper, None));
+        }),
+      ),
+      (
+        &["--power-suspend", "do-suspend", "--power-hibernate", "do-hibernate"],
+        true,
+        Some(|greeter| {
+          assert_eq!(greeter.powers.options[2].command.as_deref(), Some("do-suspend"));
+          assert_eq!(greeter.powers.options[3].command.as_deref(), Some("do-hibernate"));
         }),
       ),
       // Unknown options are ignored

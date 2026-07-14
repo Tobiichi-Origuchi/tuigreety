@@ -59,6 +59,10 @@ Options:
                         command to run to shut down the system
         --power-reboot 'CMD [ARGS]...'
                         command to run to reboot the system
+        --power-suspend 'CMD [ARGS]...'
+                        command to run to suspend the system
+        --power-hibernate 'CMD [ARGS]...'
+                        command to run to hibernate the system
         --power-no-setsid
                         do not prefix power commands with setsid
         --kb-command [1-12]
@@ -210,9 +214,9 @@ By default, unless you change it, all X11 sessions (those picked up from `/usr/s
 
 ### Power management
 
-Two power actions are possible from `tuigreet`, shutting down (through `shutdown -h now`) and rebooting (with `shutdown -r now`) the machine. This requires that those commands be executable by regular users, which is not the case on some distros.
+Four power actions are possible from `tuigreet`: shutting down, rebooting, suspending and hibernating the machine. Shutdown and reboot use `shutdown -h now` and `shutdown -r now`. Suspend and hibernate use `systemctl` when systemd is running and `loginctl` when elogind is running. If neither login manager can be identified, no default suspend or hibernate command is configured.
 
-To alleviate this, there are two options that can be used to customize the commands that are run: `--power-shutdown` and `--power-reboot`. The provided commands must be non-interactive, meaning they will not be able to print anything or prompt for anything. If you need to use `sudo` or `doas`, they will need to be configured to run passwordless for those specific commands.
+The commands can be customized with `--power-shutdown`, `--power-reboot`, `--power-suspend` and `--power-hibernate`. The provided commands must be non-interactive, meaning they will not be able to print anything or prompt for anything. If you need to use `sudo` or `doas`, they will need to be configured to run passwordless for those specific commands.
 
 An example for `/etc/greetd/config.toml`:
 

@@ -20,6 +20,8 @@ new_command = Новая команда:
 
 shutdown = Выключение
 reboot = Перезагрузка
+suspend = Спящий режим
+hibernate = Гибернация
 
 command_exited = Команда завершилась с
 command_failed = Команда не выполнена

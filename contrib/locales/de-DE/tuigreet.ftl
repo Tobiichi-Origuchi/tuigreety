@@ -18,6 +18,8 @@ new_command = Neuer Befehl:
 
 shutdown = Herunterfahren
 reboot = Neustart
+suspend = Bereitschaft
+hibernate = Ruhezustand
 
 status_command = CMD
 status_caps = FESTSTELLTASTE

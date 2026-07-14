@@ -190,6 +190,16 @@ async fn power_menu() {
             label: "And back on again".to_string(),
             ..Default::default()
           },
+          Power {
+            action: PowerOption::Suspend,
+            label: "Take a nap".to_string(),
+            ..Default::default()
+          },
+          Power {
+            action: PowerOption::Hibernate,
+            label: "Sleep for winter".to_string(),
+            ..Default::default()
+          },
         ],
         selected: 0,
       };
@@ -208,6 +218,8 @@ async fn power_menu() {
       assert!(runner.output().await.contains("What to do?"));
       assert!(runner.output().await.contains("Turn it off"));
       assert!(runner.output().await.contains("And back on again"));
+      assert!(runner.output().await.contains("Take a nap"));
+      assert!(runner.output().await.contains("Sleep for winter"));
     }
   });
 
