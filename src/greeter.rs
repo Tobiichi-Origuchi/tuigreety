@@ -540,8 +540,8 @@ impl Greeter {
     if self.config().opt_present("user-menu") {
       self.user_menu = true;
 
-      let min_uid = self.config().opt_str("user-menu-min-uid").and_then(|uid| uid.parse::<u16>().ok());
-      let max_uid = self.config().opt_str("user-menu-max-uid").and_then(|uid| uid.parse::<u16>().ok());
+      let min_uid = self.config().opt_str("user-menu-min-uid").and_then(|uid| uid.parse::<u32>().ok());
+      let max_uid = self.config().opt_str("user-menu-max-uid").and_then(|uid| uid.parse::<u32>().ok());
       let (min_uid, max_uid) = get_min_max_uids(min_uid, max_uid);
 
       tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
@@ -816,7 +816,7 @@ mod test {
           assert_eq!(greeter.powers.options[3].command.as_deref(), Some("do-hibernate"));
         }),
       ),
-      (&["--user-menu", "--user-menu-min-uid", "424242", "--user-menu-max-uid", "424242"], true, None),
+      (&["--user-menu", "--user-menu-min-uid", "70000", "--user-menu-max-uid", "70000"], true, None),
       // Unknown options are ignored
       (&["--asterisk-char", ""], true, None),
       (&["--min-uid", "10000", "--max-uid", "5000"], true, None),
