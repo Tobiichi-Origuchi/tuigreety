@@ -1,0 +1,78 @@
+name: Publish AUR packages
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        required: true
+        type: string
+    secrets:
+      AUR_SSH_PRIVATE_KEY:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to publish
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aur-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - name: Install packaging tools
+        run: pacman -Syu --noconfirm git openssh pacman-contrib rustup scdoc greetd
+      - uses: actions/checkout@v7.0.0
+      - name: Configure build and SSH users
+        env:
+          AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
+        run: |
+          test -n "$AUR_SSH_PRIVATE_KEY"
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          install -d -m700 -o builder -g builder /home/builder/.ssh
+          install -m600 -o builder -g builder /dev/null /home/builder/.ssh/aur
+          echo "$AUR_SSH_PRIVATE_KEY" > /home/builder/.ssh/aur
+          ssh-keyscan -t ed25519 aur.archlinux.org > /home/builder/.ssh/known_hosts
+          test "$(ssh-keygen -lf /home/builder/.ssh/known_hosts -E sha256 | awk '{print $2}')" = 'SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4'
+          chown builder:builder /home/builder/.ssh/known_hosts
+          chmod 600 /home/builder/.ssh/known_hosts
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          runuser -u builder -- git config --global user.name 'Tobiichi Origuchi'
+          runuser -u builder -- git config --global user.email 'Tobiichi-Origuchi@users.noreply.github.com'
+      - name: Prepare and validate packages
+        run: |
+          for package in tuigreety tuigreety-bin tuigreety-git; do
+            directory="packaging/aur/$package"
+            cp packaging/aur/tuigreet.conf "$directory/tuigreet.conf"
+            if [[ $package != tuigreety-git ]]; then
+              sed -i "s/^pkgver=.*/pkgver=$VERSION/" "$directory/PKGBUILD"
+            fi
+            chown -R builder:builder "$directory"
+            runuser -u builder -- sh -c "cd '$directory' && updpkgsums && makepkg --printsrcinfo > .SRCINFO"
+            runuser -u builder -- sh -c "cd '$directory' && makepkg --cleanbuild --noconfirm"
+          done
+      - name: Publish packages
+        run: |
+          for package in tuigreety tuigreety-bin tuigreety-git; do
+            directory="packaging/aur/$package"
+            repository="/home/builder/$package"
+            runuser -u builder -- git -c init.defaultBranch=master clone "ssh://aur@aur.archlinux.org/$package.git" "$repository"
+            install -m644 -o builder -g builder "$directory/PKGBUILD" "$repository/PKGBUILD"
+            install -m644 -o builder -g builder "$directory/.SRCINFO" "$repository/.SRCINFO"
+            install -m644 -o builder -g builder "$directory/tuigreet.conf" "$repository/tuigreet.conf"
+            runuser -u builder -- sh -c "cd '$repository' && git add PKGBUILD .SRCINFO tuigreet.conf"
+            if ! runuser -u builder -- sh -c "cd '$repository' && git diff --cached --quiet"; then
+              runuser -u builder -- sh -c "cd '$repository' && git commit -m 'Update to $VERSION' && git push origin master"
+            fi
+          done

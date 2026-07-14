@@ -143,3 +143,11 @@ jobs:
           else
             gh release create tip dist/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease --title tip --notes "Continuous build from master."
           fi
+
+  aur:
+    needs: publish
+    if: github.ref_type == 'tag'
+    uses: ./.github/workflows/aur.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit
