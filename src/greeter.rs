@@ -454,7 +454,7 @@ impl Greeter {
     opts.optflag(
       "",
       "text-config",
-      "load text overrides from system and user configuration files",
+      "load text overrides from the system configuration file",
     );
     opts.optopt(
       "",

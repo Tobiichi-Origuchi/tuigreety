@@ -1,9 +1,4 @@
-use std::{
-  env,
-  error::Error,
-  io,
-  path::{Path, PathBuf},
-};
+use std::{error::Error, io, path::Path};
 
 use ini::Ini;
 
@@ -78,13 +73,7 @@ impl Text {
   }
 
   pub fn load_standard(&mut self) -> Result<(), Box<dyn Error>> {
-    self.load_if_present(Path::new(SYSTEM_TEXT_CONFIG))?;
-
-    if let Some(path) = user_text_config() {
-      self.load_if_present(&path)?;
-    }
-
-    Ok(())
+    self.load_if_present(Path::new(SYSTEM_TEXT_CONFIG))
   }
 
   pub fn load_file(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
@@ -142,13 +131,6 @@ impl Text {
     value.clone_into(target);
     true
   }
-}
-
-fn user_text_config() -> Option<PathBuf> {
-  env::var_os("XDG_CONFIG_HOME")
-    .map(PathBuf::from)
-    .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-    .map(|path| path.join("tuigreet/text.conf"))
 }
 
 #[cfg(test)]

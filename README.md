@@ -30,8 +30,7 @@ Options:
     -i, --issue         show the host's issue file
     -g, --greeting GREETING
                         show custom text above login prompt
-        --text-config   load text overrides from system and user configuration
-                        files
+        --text-config   load text overrides from the system configuration file
         --text-config-file FILE
                         load text overrides from an explicit file
     -t, --time          display the current date and time
@@ -150,11 +149,10 @@ $ LD_PRELOAD=/path/to/libnss_wrapper.so cargo test --all-features # To run the w
 tuigreet reads TOML configuration from these layers, with later layers overriding earlier ones:
 
 1. `/etc/tuigreet/config.toml`
-2. `$XDG_CONFIG_HOME/tuigreet/config.toml`, or `$HOME/.config/tuigreet/config.toml`
-3. The file selected by `--config FILE`
-4. Individual command-line options
+2. The file selected by `--config FILE`
+3. Individual command-line options
 
-`HOME` and `XDG_CONFIG_HOME` belong to the account running tuigreet (normally the greeter account), not the user who is about to log in. All fields are optional. Unknown fields, invalid values, unreadable files, and malformed command-line options produce warnings on standard error and are ignored; valid fields still take effect. A file with invalid TOML syntax is ignored as a whole. This makes a configuration mistake non-fatal, while preserving the previous valid layer or built-in default.
+All fields are optional. Unknown fields, invalid values, unreadable files, and malformed command-line options produce warnings on standard error and are ignored; valid fields still take effect. A file with invalid TOML syntax is ignored as a whole. This makes a configuration mistake non-fatal, while preserving the previous valid layer or built-in default.
 
 See [`contrib/tuigreet.toml`](contrib/tuigreet.toml) for every supported field and its default. Arrays are used for session directories and environment entries, for example:
 
@@ -191,7 +189,7 @@ Please refer to [greetd's wiki](https://man.sr.ht/~kennylevinsen/greetd/) for mo
 
 ### Text overrides
 
-The interface uses built-in English text and does not inspect the locale or read text configuration files by default. `--text-config` enables optional overrides from `/etc/tuigreet/text.conf`, followed by `$XDG_CONFIG_HOME/tuigreet/text.conf` (or `$HOME/.config/tuigreet/text.conf`). `--text-config-file FILE` loads an explicitly selected file after those files, or by itself when `--text-config` is absent.
+The interface uses built-in English text and does not inspect the locale or read text configuration files by default. `--text-config` enables optional overrides from `/etc/tuigreet/text.conf`. `--text-config-file FILE` loads an explicitly selected file after it, or by itself when `--text-config` is absent.
 
 Files use `key=value` entries. Every field may be omitted; omitted fields retain their built-in value. Unknown fields are rejected so spelling mistakes do not silently produce a partially customized interface. See [`contrib/text.conf`](contrib/text.conf) for all supported fields. The `{hostname}` placeholder in `title_authenticate` is replaced at runtime.
 

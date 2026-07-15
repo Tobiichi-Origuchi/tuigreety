@@ -65,8 +65,7 @@ tuigreet - A graphical console greeter for greetd
 	This option is mutually exclusive with *--issue*.
 
 *--text-config*
-	Load text overrides from */etc/tuigreet/text.conf*, then from
-	*$XDG_CONFIG_HOME/tuigreet/text.conf* or *$HOME/.config/tuigreet/text.conf*.
+	Load text overrides from */etc/tuigreet/text.conf*.
 	No text configuration is read unless this option is present.
 
 *--text-config-file FILE*
@@ -164,11 +163,9 @@ tuigreet - A graphical console greeter for greetd
 
 # CONFIGURATION
 
-Configuration is loaded from */etc/tuigreet/config.toml*, then from
-*$XDG_CONFIG_HOME/tuigreet/config.toml* or *$HOME/.config/tuigreet/config.toml*.
-An explicit *--config FILE* is applied next, and individual command-line options
-have the highest priority. The environment variables and home directory are
-those of the account running tuigreet.
+Configuration is loaded from */etc/tuigreet/config.toml*. An explicit
+*--config FILE* is applied next, and individual command-line options have the
+highest priority.
 
 All fields are optional. Unknown or invalid fields are warned about and ignored
 individually; an invalid TOML document is ignored as a whole. Configuration and

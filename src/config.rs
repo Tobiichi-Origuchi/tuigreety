@@ -162,29 +162,15 @@ struct ThemeLayer {
 }
 
 pub fn load(matches: &Matches) -> (Settings, Vec<String>) {
-  let user = user_config_path();
   let explicit = matches.opt_str("config").map(PathBuf::from);
-  load_paths(
-    Some(Path::new(SYSTEM_CONFIG)),
-    user.as_deref(),
-    explicit.as_deref(),
-    matches,
-  )
+  load_paths(Some(Path::new(SYSTEM_CONFIG)), explicit.as_deref(), matches)
 }
 
-fn load_paths(
-  system: Option<&Path>,
-  user: Option<&Path>,
-  explicit: Option<&Path>,
-  matches: &Matches,
-) -> (Settings, Vec<String>) {
+fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
   let mut settings = Settings::default();
   let mut warnings = Vec::new();
 
   if let Some(path) = system {
-    load_optional(path, &mut settings, &mut warnings);
-  }
-  if let Some(path) = user {
     load_optional(path, &mut settings, &mut warnings);
   }
   if let Some(path) = explicit {
@@ -226,13 +212,6 @@ fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String
 
   let layer = toml_layer(&document, path, &content, warnings);
   apply_layer(settings, layer, &path.display().to_string(), warnings);
-}
-
-fn user_config_path() -> Option<PathBuf> {
-  env::var_os("XDG_CONFIG_HOME")
-    .map(PathBuf::from)
-    .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))
-    .map(|path| path.join("tuigreet/config.toml"))
 }
 
 fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &mut Vec<String>) {
@@ -999,20 +978,18 @@ mod tests {
   fn layers_every_field_without_losing_false_or_zero() {
     let dir = tempdir().unwrap();
     let system = dir.path().join("system.toml");
-    let user = dir.path().join("user.toml");
     let explicit = dir.path().join("explicit.toml");
     write(
       &system,
       "[general]\ndebug = true\n[display]\nwidth = 40\ntime = true\n[layout]\nwindow-padding = 9\n",
     );
     write(
-      &user,
-      "[general]\ndebug = false\n[display]\nwidth = 60\n[layout]\nwindow-padding = 0\n",
+      &explicit,
+      "[general]\ndebug = false\n[display]\nwidth = 70\n[layout]\nwindow-padding = 0\n",
     );
-    write(&explicit, "[display]\nwidth = 70\n");
     let cli = matches(&["--width", "80"]);
 
-    let (settings, warnings) = load_paths(Some(&system), Some(&user), Some(&explicit), &cli);
+    let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &cli);
 
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(!settings.debug);
@@ -1030,7 +1007,7 @@ mod tests {
       "[display]\nwidth = 'wide'\ntime = true\nmystery = 1\n[secret]\ncharacters = ''\n",
     );
 
-    let (settings, warnings) = load_paths(Some(&config), None, None, &matches(&[]));
+    let (settings, warnings) = load_paths(Some(&config), None, &matches(&[]));
 
     assert!(settings.time);
     assert_eq!(settings.width, 80);
@@ -1056,17 +1033,17 @@ mod tests {
   fn invalid_relationships_keep_the_previous_layer() {
     let dir = tempdir().unwrap();
     let system = dir.path().join("system.toml");
-    let user = dir.path().join("user.toml");
+    let explicit = dir.path().join("explicit.toml");
     write(
       &system,
       "[users]\nmin-uid = 1000\nmax-uid = 60000\n[keybindings]\ncommand = 1\nsessions = 2\npower = 3\n",
     );
     write(
-      &user,
+      &explicit,
       "[users]\nmin-uid = 9000\nmax-uid = 8000\n[keybindings]\ncommand = 2\n[remember]\nuser-session = true\n",
     );
 
-    let (settings, warnings) = load_paths(Some(&system), Some(&user), None, &matches(&[]));
+    let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
 
     assert_eq!((settings.min_uid, settings.max_uid), (Some(1000), Some(60000)));
     assert_eq!(
@@ -1085,7 +1062,7 @@ mod tests {
     let config = dir.path().join("config.toml");
     write(&config, "[display\ntime = true");
 
-    let (settings, warnings) = load_paths(Some(&config), None, None, &matches(&[]));
+    let (settings, warnings) = load_paths(Some(&config), None, &matches(&[]));
 
     assert!(!settings.time);
     assert!(warnings.iter().any(|warning| warning.contains("invalid TOML")));
@@ -1097,7 +1074,7 @@ mod tests {
     let config = dir.path().join("config.toml");
     write(&config, "[session]\nenvironment = ['A=B', 1, 'INVALID', 'C=D=E']\n");
 
-    let (settings, warnings) = load_paths(Some(&config), None, None, &matches(&[]));
+    let (settings, warnings) = load_paths(Some(&config), None, &matches(&[]));
 
     assert_eq!(settings.environment, ["A=B", "C=D=E"]);
     assert_eq!(warnings.len(), 2);
@@ -1126,11 +1103,11 @@ mod tests {
   fn theme_fields_merge_and_can_be_cleared() {
     let dir = tempdir().unwrap();
     let system = dir.path().join("system.toml");
-    let user = dir.path().join("user.toml");
+    let explicit = dir.path().join("explicit.toml");
     write(&system, "[theme]\nborder = 'blue'\ntext = 'white'\n");
-    write(&user, "[theme]\nborder = false\nprompt = 'green'\n");
+    write(&explicit, "[theme]\nborder = false\nprompt = 'green'\n");
 
-    let (settings, warnings) = load_paths(Some(&system), Some(&user), None, &matches(&[]));
+    let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
 
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(settings.theme.border, None);
@@ -1142,11 +1119,11 @@ mod tests {
   fn invalid_theme_fields_do_not_replace_valid_colors() {
     let dir = tempdir().unwrap();
     let system = dir.path().join("system.toml");
-    let user = dir.path().join("user.toml");
+    let explicit = dir.path().join("explicit.toml");
     write(&system, "[theme]\nborder = 'blue'\n");
-    write(&user, "[theme]\nborder = 'not-a-color'\nunknown = 'red'\n");
+    write(&explicit, "[theme]\nborder = 'not-a-color'\nunknown = 'red'\n");
 
-    let (settings, warnings) = load_paths(Some(&system), Some(&user), None, &matches(&[]));
+    let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
 
     assert_eq!(settings.theme.border.as_deref(), Some("blue"));
     assert!(warnings.iter().any(|warning| warning.contains("invalid color")));
