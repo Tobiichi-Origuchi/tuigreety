@@ -1,14 +1,14 @@
 use std::{
   env,
   error::Error,
-  ffi::OsStr,
+  ffi::{OsStr, OsString},
   fmt::{self, Display},
   path::PathBuf,
   process,
   sync::Arc,
 };
 
-use getopts::{Fail, Matches, Options};
+use getopts::{Matches, Options};
 use tokio::{
   net::UnixStream,
   sync::{RwLock, RwLockWriteGuard, mpsc::Sender},
@@ -45,6 +45,127 @@ use crate::{
 // `startx` wants an absolute path to the executable as a first argument.
 // We don't want to resolve the session command in the greeter though, so it should be additionally wrapped with a known noop command (like `/usr/bin/env`).
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OptionArgument {
+  None,
+  Required,
+  Optional,
+}
+
+#[derive(Clone, Debug)]
+struct OptionSpecification {
+  short: Option<char>,
+  long: Option<String>,
+  argument: OptionArgument,
+  repeatable: bool,
+}
+
+impl OptionSpecification {
+  fn new(short: &str, long: &str, argument: OptionArgument, repeatable: bool) -> Self {
+    Self {
+      short: (!short.is_empty()).then(|| short.chars().next().expect("validated short option")),
+      long: (!long.is_empty()).then(|| long.to_owned()),
+      argument,
+      repeatable,
+    }
+  }
+
+  fn canonical_name(&self) -> String {
+    self
+      .long
+      .clone()
+      .or_else(|| self.short.map(|short| short.to_string()))
+      .expect("option has a name")
+  }
+
+  fn normalized(&self, value: Option<&str>) -> OsString {
+    let name = self
+      .long
+      .as_ref()
+      .map(|long| format!("--{long}"))
+      .or_else(|| self.short.map(|short| format!("-{short}")))
+      .expect("option has a name");
+
+    match value {
+      Some(value) => format!("{name}={value}").into(),
+      None => name.into(),
+    }
+  }
+}
+
+/// `getopts` deliberately reports an option name but not the argv span that
+/// caused an error. Keep the option schema beside it so tolerant parsing can
+/// discard exactly the malformed occurrence instead of guessing its index.
+#[derive(Clone, Debug)]
+pub(crate) struct CliOptions {
+  parser: Options,
+  specifications: Vec<OptionSpecification>,
+}
+
+impl CliOptions {
+  fn new() -> Self {
+    Self {
+      parser: Options::new(),
+      specifications: Vec::new(),
+    }
+  }
+
+  fn optflag(&mut self, short: &str, long: &str, description: &str) {
+    self.parser.optflag(short, long, description);
+    self
+      .specifications
+      .push(OptionSpecification::new(short, long, OptionArgument::None, false));
+  }
+
+  fn optflagopt(&mut self, short: &str, long: &str, description: &str, hint: &str) {
+    self.parser.optflagopt(short, long, description, hint);
+    self
+      .specifications
+      .push(OptionSpecification::new(short, long, OptionArgument::Optional, false));
+  }
+
+  fn optopt(&mut self, short: &str, long: &str, description: &str, hint: &str) {
+    self.parser.optopt(short, long, description, hint);
+    self
+      .specifications
+      .push(OptionSpecification::new(short, long, OptionArgument::Required, false));
+  }
+
+  fn optmulti(&mut self, short: &str, long: &str, description: &str, hint: &str) {
+    self.parser.optmulti(short, long, description, hint);
+    self
+      .specifications
+      .push(OptionSpecification::new(short, long, OptionArgument::Required, true));
+  }
+
+  pub(crate) fn parse<C: IntoIterator>(&self, args: C) -> getopts::Result
+  where
+    C::Item: AsRef<OsStr>,
+  {
+    self.parser.parse(args)
+  }
+
+  fn usage(&self, brief: &str) -> String {
+    self.parser.usage(brief)
+  }
+
+  fn by_long(&self, name: &str) -> Option<(usize, &OptionSpecification)> {
+    self
+      .specifications
+      .iter()
+      .enumerate()
+      .find(|(_, specification)| specification.long.as_deref() == Some(name))
+  }
+
+  fn by_short(&self, name: char) -> Option<(usize, &OptionSpecification)> {
+    self
+      .specifications
+      .iter()
+      .enumerate()
+      .find(|(_, specification)| specification.short == Some(name))
+  }
+}
 
 #[derive(Debug, Copy, Clone)]
 pub enum AuthStatus {
@@ -433,8 +554,8 @@ impl Greeter {
     }
   }
 
-  pub fn options() -> Options {
-    let mut opts = Options::new();
+  pub(crate) fn options() -> CliOptions {
+    let mut opts = CliOptions::new();
 
     let xsession_wrapper_desc =
       format!("wrapper command to initialize X server and launch X11 sessions (default: {DEFAULT_XSESSION_WRAPPER})");
@@ -915,7 +1036,7 @@ fn mock_sessions() -> Vec<Session> {
   .collect()
 }
 
-fn print_usage(opts: Options) {
+fn print_usage(opts: CliOptions) {
   eprint!("{}", opts.usage("Usage: tuigreet [OPTIONS]"));
 }
 
@@ -952,50 +1073,287 @@ where
   }
 }
 
-fn parse_options_ignoring_invalid<S>(opts: &Options, args: &[S]) -> (Matches, Vec<String>)
+fn parse_options_ignoring_invalid<S>(opts: &CliOptions, args: &[S]) -> (Matches, Vec<String>)
 where
   S: AsRef<OsStr>,
 {
-  let mut args: Vec<&OsStr> = args.iter().map(AsRef::as_ref).collect();
-  let mut warnings = Vec::new();
+  let (args, mut warnings) = recover_options(opts, args);
 
-  loop {
-    match opts.parse(&args) {
-      Ok(matches) => {
-        for argument in &matches.free {
-          warnings.push(format!("unexpected positional argument '{argument}'; ignoring it"));
-        }
-        return (matches, warnings);
-      },
-      Err(error) => {
-        let name = match &error {
-          Fail::ArgumentMissing(name)
-          | Fail::UnrecognizedOption(name)
-          | Fail::OptionDuplicated(name)
-          | Fail::OptionMissing(name)
-          | Fail::UnexpectedArgument(name) => name,
-        };
-        let index = args.iter().rposition(|arg| option_has_name(arg, name)).unwrap_or(0);
-        warnings.push(format!("{error}; ignoring {}", args[index].to_string_lossy()));
-        args.remove(index);
-      },
-    }
-  }
-}
-
-fn option_has_name(arg: &OsStr, name: &str) -> bool {
-  let Some(arg) = arg.to_str() else {
-    return false;
+  let matches = match opts.parse(&args) {
+    Ok(matches) => matches,
+    Err(error) => {
+      // The recovered argv is generated from the same schema as `getopts`, so
+      // this can only indicate a bug in the recovery code. Startup must remain
+      // available even then.
+      warnings.push(format!(
+        "could not recover command-line options ({error}); ignoring all command-line options"
+      ));
+      opts
+        .parse(std::iter::empty::<&str>())
+        .expect("the tuigreet option schema has no required options")
+    },
   };
 
-  if let Some(long) = arg.strip_prefix("--") {
-    return long.split_once('=').map_or(long, |(name, _)| name) == name;
+  (matches, warnings)
+}
+
+fn recover_options<S>(opts: &CliOptions, args: &[S]) -> (Vec<OsString>, Vec<String>)
+where
+  S: AsRef<OsStr>,
+{
+  let mut recovered = Vec::new();
+  let mut warnings = Vec::new();
+  let mut seen = vec![false; opts.specifications.len()];
+  let mut index = 0;
+  let mut options_ended = false;
+
+  while index < args.len() {
+    let raw = args[index].as_ref();
+    let Some(argument) = raw.to_str() else {
+      warnings.push(format!("argument {raw:?} is not valid UTF-8; ignoring it"));
+      index += 1;
+      continue;
+    };
+
+    if options_ended {
+      warn_positional(argument, &mut warnings);
+      index += 1;
+      continue;
+    }
+
+    if argument == "--" {
+      options_ended = true;
+      index += 1;
+      continue;
+    }
+
+    if let Some(long) = argument.strip_prefix("--") {
+      let (name, attached) = long
+        .split_once('=')
+        .map_or((long, None), |(name, value)| (name, Some(value)));
+      let Some((option_index, specification)) = opts.by_long(name) else {
+        warn_unknown(name, argument, &mut warnings);
+        index += 1;
+        continue;
+      };
+
+      match specification.argument {
+        OptionArgument::None => {
+          if attached.is_some() {
+            warnings.push(format!(
+              "Option '{name}' does not take an argument; ignoring {argument}"
+            ));
+          } else {
+            retain_option(
+              option_index,
+              specification,
+              None,
+              argument,
+              &mut seen,
+              &mut recovered,
+              &mut warnings,
+            );
+          }
+          index += 1;
+        },
+        OptionArgument::Optional => {
+          retain_option(
+            option_index,
+            specification,
+            attached,
+            argument,
+            &mut seen,
+            &mut recovered,
+            &mut warnings,
+          );
+          index += 1;
+        },
+        OptionArgument::Required => {
+          if let Some(value) = attached {
+            retain_option(
+              option_index,
+              specification,
+              Some(value),
+              argument,
+              &mut seen,
+              &mut recovered,
+              &mut warnings,
+            );
+            index += 1;
+          } else if let Some(raw_value) = args.get(index + 1).map(AsRef::as_ref) {
+            match raw_value.to_str() {
+              Some(value) => retain_option(
+                option_index,
+                specification,
+                Some(value),
+                argument,
+                &mut seen,
+                &mut recovered,
+                &mut warnings,
+              ),
+              None => warnings.push(format!(
+                "argument {raw_value:?} to option '{name}' is not valid UTF-8; ignoring {argument} and its argument"
+              )),
+            }
+            index += 2;
+          } else {
+            warnings.push(format!("Argument to option '{name}' missing; ignoring {argument}"));
+            index += 1;
+          }
+        },
+      }
+      continue;
+    }
+
+    let Some(cluster) = argument.strip_prefix('-').filter(|cluster| !cluster.is_empty()) else {
+      warn_positional(argument, &mut warnings);
+      index += 1;
+      continue;
+    };
+
+    let mut consumed_next = false;
+    for (offset, short) in cluster.char_indices() {
+      let Some((option_index, specification)) = opts.by_short(short) else {
+        warn_unknown(&short.to_string(), &format!("-{short}"), &mut warnings);
+        continue;
+      };
+
+      if specification.argument == OptionArgument::None {
+        retain_option(
+          option_index,
+          specification,
+          None,
+          &format!("-{short}"),
+          &mut seen,
+          &mut recovered,
+          &mut warnings,
+        );
+        continue;
+      }
+
+      let value_offset = offset + short.len_utf8();
+      if value_offset < cluster.len() {
+        retain_option(
+          option_index,
+          specification,
+          Some(&cluster[value_offset..]),
+          argument,
+          &mut seen,
+          &mut recovered,
+          &mut warnings,
+        );
+      } else {
+        match specification.argument {
+          OptionArgument::Required => {
+            if let Some(raw_value) = args.get(index + 1).map(AsRef::as_ref) {
+              match raw_value.to_str() {
+                Some(value) => retain_option(
+                  option_index,
+                  specification,
+                  Some(value),
+                  argument,
+                  &mut seen,
+                  &mut recovered,
+                  &mut warnings,
+                ),
+                None => warnings.push(format!(
+                  "argument {raw_value:?} to option '{short}' is not valid UTF-8; ignoring {argument} and its argument"
+                )),
+              }
+              consumed_next = true;
+            } else {
+              warnings.push(format!("Argument to option '{short}' missing; ignoring {argument}"));
+            }
+          },
+          OptionArgument::Optional => {
+            if let Some(raw_value) = args.get(index + 1).map(AsRef::as_ref) {
+              match raw_value.to_str() {
+                Some(value) if !is_option(value) => {
+                  retain_option(
+                    option_index,
+                    specification,
+                    Some(value),
+                    argument,
+                    &mut seen,
+                    &mut recovered,
+                    &mut warnings,
+                  );
+                  consumed_next = true;
+                },
+                Some(_) => retain_option(
+                  option_index,
+                  specification,
+                  None,
+                  argument,
+                  &mut seen,
+                  &mut recovered,
+                  &mut warnings,
+                ),
+                None => {
+                  warnings.push(format!(
+                    "optional argument {raw_value:?} to option '{short}' is not valid UTF-8; ignoring {argument} and its argument"
+                  ));
+                  consumed_next = true;
+                },
+              }
+            } else {
+              retain_option(
+                option_index,
+                specification,
+                None,
+                argument,
+                &mut seen,
+                &mut recovered,
+                &mut warnings,
+              );
+            }
+          },
+          OptionArgument::None => unreachable!(),
+        }
+      }
+
+      // As in getopts, an argument-taking short option owns the rest of its
+      // cluster, so no following character can be another option.
+      break;
+    }
+
+    index += 1 + usize::from(consumed_next);
   }
 
-  name.chars().count() == 1
-    && arg
-      .strip_prefix('-')
-      .is_some_and(|shorts| shorts.chars().any(|short| name.starts_with(short)))
+  (recovered, warnings)
+}
+
+fn retain_option(
+  option_index: usize,
+  specification: &OptionSpecification,
+  value: Option<&str>,
+  spelling: &str,
+  seen: &mut [bool],
+  recovered: &mut Vec<OsString>,
+  warnings: &mut Vec<String>,
+) {
+  if !specification.repeatable && seen[option_index] {
+    warnings.push(format!(
+      "Option '{}' given more than once; ignoring {spelling}",
+      specification.canonical_name()
+    ));
+    return;
+  }
+
+  seen[option_index] = true;
+  recovered.push(specification.normalized(value));
+}
+
+fn is_option(argument: &str) -> bool {
+  argument.starts_with('-') && argument.len() > 1
+}
+
+fn warn_unknown(name: &str, spelling: &str, warnings: &mut Vec<String>) {
+  warnings.push(format!("Unrecognized option: '{name}'; ignoring {spelling}"));
+}
+
+fn warn_positional(argument: &str, warnings: &mut Vec<String>) {
+  warnings.push(format!("unexpected positional argument '{argument}'; ignoring it"));
 }
 
 fn print_version() {
@@ -1009,7 +1367,7 @@ fn print_version() {
 
 #[cfg(test)]
 mod test {
-  use std::path::PathBuf;
+  use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
   use super::{mock_sessions, parse_options_ignoring_invalid, print_information};
   use crate::{
@@ -1106,6 +1464,161 @@ mod test {
     assert!(matches.opt_present("mock"));
     assert!(matches.free.is_empty());
     assert!(warnings.is_empty());
+  }
+
+  #[test]
+  fn duplicate_options_only_discard_the_duplicate_occurrence() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &[
+      "--check-config",
+      "--config",
+      "/first.toml",
+      "--config",
+      "/second.toml",
+      "-t",
+      "--time",
+      "--mock",
+    ]);
+
+    assert!(matches.opt_present("check-config"));
+    assert_eq!(matches.opt_str("config").as_deref(), Some("/first.toml"));
+    assert!(matches.opt_present("time"));
+    assert!(matches.opt_present("mock"));
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| warning.contains("given more than once")));
+  }
+
+  #[test]
+  fn duplicate_short_flags_do_not_remove_earlier_arguments() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &[
+      "--check-config",
+      "--config",
+      "/config.toml",
+      "--mock",
+      "-t",
+      "-t",
+    ]);
+
+    assert!(matches.opt_present("check-config"));
+    assert_eq!(matches.opt_str("config").as_deref(), Some("/config.toml"));
+    assert!(matches.opt_present("mock"));
+    assert!(matches.opt_present("time"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Option 'time' given more than once"));
+
+    let (matches, warnings) =
+      parse_options_ignoring_invalid(&Greeter::options(), &["-c", "first", "-csecond", "--mock"]);
+    assert_eq!(matches.opt_str("cmd").as_deref(), Some("first"));
+    assert!(matches.opt_present("mock"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Option 'cmd' given more than once"));
+  }
+
+  #[test]
+  fn attached_and_detached_values_are_preserved() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &[
+      "--config=/config.toml",
+      "-chello world",
+      "--debug=/tmp/debug.log",
+      "--env=A=B",
+      "--env",
+      "C=D",
+    ]);
+
+    assert_eq!(matches.opt_str("config").as_deref(), Some("/config.toml"));
+    assert_eq!(matches.opt_str("cmd").as_deref(), Some("hello world"));
+    assert_eq!(matches.opt_str("debug").as_deref(), Some("/tmp/debug.log"));
+    assert_eq!(matches.opt_strs("env"), ["A=B", "C=D"]);
+    assert!(warnings.is_empty());
+  }
+
+  #[test]
+  fn missing_values_do_not_discard_valid_options() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &["--mock", "--time", "--config"]);
+
+    assert!(matches.opt_present("mock"));
+    assert!(matches.opt_present("time"));
+    assert!(!matches.opt_present("config"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Argument to option 'config' missing"));
+
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &["--mock", "-c"]);
+    assert!(matches.opt_present("mock"));
+    assert!(!matches.opt_present("cmd"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Argument to option 'c' missing"));
+  }
+
+  #[test]
+  fn valid_members_of_unknown_short_clusters_are_preserved() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &["-tzr", "-icuname", "--mock"]);
+
+    assert!(matches.opt_present("time"));
+    assert!(matches.opt_present("remember"));
+    assert!(matches.opt_present("issue"));
+    assert_eq!(matches.opt_str("cmd").as_deref(), Some("uname"));
+    assert!(matches.opt_present("mock"));
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("Unrecognized option: 'z'"));
+  }
+
+  #[test]
+  fn malformed_long_options_do_not_affect_later_options() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &[
+      "--unknown=value",
+      "--mock=yes",
+      "--time",
+      "--remember",
+    ]);
+
+    assert!(!matches.opt_present("mock"));
+    assert!(matches.opt_present("time"));
+    assert!(matches.opt_present("remember"));
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings[0].contains("Unrecognized option: 'unknown'"));
+    assert!(warnings[1].contains("does not take an argument"));
+  }
+
+  #[test]
+  fn positional_arguments_are_ignored_without_stopping_option_parsing() {
+    let (matches, warnings) =
+      parse_options_ignoring_invalid(&Greeter::options(), &["first", "--mock", "second", "--time"]);
+
+    assert!(matches.opt_present("mock"));
+    assert!(matches.opt_present("time"));
+    assert!(matches.free.is_empty());
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| warning.contains("positional argument")));
+  }
+
+  #[test]
+  fn double_dash_ends_option_parsing() {
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &["--time", "--", "--mock", "tail"]);
+
+    assert!(matches.opt_present("time"));
+    assert!(!matches.opt_present("mock"));
+    assert!(matches.free.is_empty());
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| warning.contains("positional argument")));
+  }
+
+  #[test]
+  fn non_utf8_tokens_only_discard_their_own_option_span() {
+    let invalid = OsString::from_vec(vec![b'-', b'-', b'x', 0xff]);
+    let invalid_value = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]);
+    let args = vec![
+      OsString::from("--time"),
+      invalid,
+      OsString::from("--config"),
+      invalid_value,
+      OsString::from("--mock"),
+    ];
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &args);
+
+    assert!(matches.opt_present("time"));
+    assert!(!matches.opt_present("config"));
+    assert!(matches.opt_present("mock"));
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| warning.contains("not valid UTF-8")));
   }
 
   #[tokio::test]
