@@ -1,5 +1,3 @@
-#![allow(unused_must_use)]
-
 /*
   Copied and adapted from the codebase of ratatui.
 
@@ -32,7 +30,7 @@
 */
 use std::{
   fmt::Write,
-  io,
+  io::{self, ErrorKind},
   sync::{Arc, Mutex},
 };
 
@@ -41,12 +39,12 @@ use ratatui::{
   buffer::{Buffer, Cell},
   layout::{Position, Rect, Size},
 };
-use tokio::sync::mpsc;
+use tokio::sync::watch;
 use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone)]
 pub struct TestBackend {
-  tick: mpsc::Sender<bool>,
+  tick: watch::Sender<u64>,
   width: u16,
   buffer: Arc<Mutex<Buffer>>,
   height: u16,
@@ -56,6 +54,9 @@ pub struct TestBackend {
 
 pub fn output(buffer: &Arc<Mutex<Buffer>>) -> String {
   let buffer = buffer.lock().unwrap();
+  if buffer.area.width == 0 {
+    return String::new();
+  }
 
   let mut view = String::with_capacity(buffer.content.len() + buffer.area.height as usize * 3);
   for cells in buffer.content.chunks(buffer.area.width as usize) {
@@ -78,9 +79,9 @@ pub fn output(buffer: &Arc<Mutex<Buffer>>) -> String {
 }
 
 impl TestBackend {
-  pub fn new(width: u16, height: u16) -> (Self, Arc<Mutex<Buffer>>, mpsc::Receiver<bool>) {
+  pub fn new(width: u16, height: u16) -> (Self, Arc<Mutex<Buffer>>, watch::Receiver<u64>) {
     let buffer = Arc::new(Mutex::new(Buffer::empty(Rect::new(0, 0, width, height))));
-    let (tx, rx) = mpsc::channel::<bool>(10);
+    let (tx, rx) = watch::channel(0);
 
     let backend = Self {
       tick: tx,
@@ -108,11 +109,11 @@ impl Backend for TestBackend {
       buffer[(x, y)] = c.clone();
     }
 
-    let sender = self.tick.clone();
-
-    std::thread::spawn(move || {
-      sender.blocking_send(true);
-    });
+    let generation = self.tick.borrow().wrapping_add(1);
+    self
+      .tick
+      .send(generation)
+      .map_err(|_| io::Error::new(ErrorKind::BrokenPipe, "render observer was dropped"))?;
 
     Ok(())
   }
@@ -143,11 +144,15 @@ impl Backend for TestBackend {
   }
 
   fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
-    let buffer = self.buffer.clone();
-    let mut buffer = buffer.lock().unwrap();
+    let mut buffer = self.buffer.lock().unwrap();
+    if buffer.content.is_empty() {
+      return Ok(());
+    }
 
     match clear_type {
-      ClearType::All => self.clear()?,
+      // Calling `self.clear()` here would try to lock `self.buffer` a second
+      // time and deadlock because std::sync::Mutex is not reentrant.
+      ClearType::All => buffer.reset(),
       ClearType::AfterCursor => {
         let index = buffer.index_of(self.pos.0, self.pos.1) + 1;
         buffer.content[index..].fill(Cell::default());
@@ -180,7 +185,7 @@ impl Backend for TestBackend {
     if n > lines_after_cursor {
       let rotate_by = n.saturating_sub(lines_after_cursor).min(max_y);
 
-      if rotate_by == self.height - 1 {
+      if rotate_by == self.height.saturating_sub(1) {
         self.clear()?;
       }
 

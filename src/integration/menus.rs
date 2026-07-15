@@ -3,6 +3,7 @@ use libgreetd_stub::SessionOptions;
 
 use super::common::IntegrationRunner;
 use crate::{
+  AuthStatus,
   power::PowerOption,
   ui::{common::menu::Menu, power::Power, sessions::Session, users::User},
 };
@@ -271,7 +272,8 @@ async fn users_menu() {
 
       runner.send_key(KeyCode::Down).await;
       runner.send_key(KeyCode::Enter).await;
-      runner.wait_for_render().await;
+      runner.wait_until_buffer_contains("Username: Bob JOE").await;
+      runner.wait_until_buffer_contains("Password:").await;
 
       assert!(runner.output().await.contains("Username: Bob JOE"));
       assert!(runner.output().await.contains("Password:"));
@@ -282,7 +284,8 @@ async fn users_menu() {
       runner.wait_until_buffer_contains("select a user").await;
 
       runner.send_text("otheruser").await;
-      runner.wait_for_render().await;
+      runner.wait_until_buffer_contains("Username: otheruser").await;
+      runner.wait_until_buffer_contains("Password:").await;
 
       assert!(runner.output().await.contains("Username: otheruser"));
       assert!(runner.output().await.contains("Password:"));
@@ -291,7 +294,8 @@ async fn users_menu() {
       runner.send_key(KeyCode::Enter).await;
       runner.send_key(KeyCode::Up).await;
       runner.send_key(KeyCode::Enter).await;
-      runner.wait_for_render().await;
+      runner.wait_until_buffer_contains("Username: Antoine POPINEAU").await;
+      runner.wait_until_buffer_contains("Password:").await;
 
       assert!(runner.output().await.contains("Username: Antoine POPINEAU"));
       assert!(runner.output().await.contains("Password:"));
@@ -300,5 +304,5 @@ async fn users_menu() {
     }
   });
 
-  runner.join_until_client_exit(events).await;
+  runner.join_until_client_exit(events, AuthStatus::Success).await;
 }

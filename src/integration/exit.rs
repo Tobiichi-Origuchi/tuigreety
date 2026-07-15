@@ -2,6 +2,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use libgreetd_stub::SessionOptions;
 
 use super::common::IntegrationRunner;
+use crate::AuthStatus;
 
 #[tokio::test]
 async fn exit() {
@@ -24,5 +25,5 @@ async fn exit() {
     }
   });
 
-  runner.join_until_client_exit(events).await;
+  runner.join_until_client_exit(events, AuthStatus::Cancel).await;
 }
