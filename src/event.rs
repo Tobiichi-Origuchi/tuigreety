@@ -23,9 +23,15 @@ pub const MAX_REFRESH_RATE: u16 = 240;
 pub enum Event {
   Key(KeyEvent),
   Render,
-  PowerCommand(Command),
+  #[cfg_attr(test, allow(dead_code))]
   ReloadConfig,
+}
+
+/// An action that must reach the main loop without competing with rendering
+/// and terminal input for space in the bounded event queue.
+pub enum Control {
   Exit(AuthStatus),
+  PowerCommand(Box<Command>),
 }
 
 pub struct Events {
@@ -106,6 +112,17 @@ impl Events {
 
 fn frame_duration(refresh_rate: u16) -> Duration {
   Duration::from_secs_f64(1.0 / f64::from(refresh_rate))
+}
+
+#[cfg(test)]
+pub(crate) fn fill_event_queue(events: &Events) {
+  loop {
+    match events.tx.try_send(Event::Render) {
+      Ok(()) => {},
+      Err(mpsc::error::TrySendError::Full(_)) => return,
+      Err(mpsc::error::TrySendError::Closed(_)) => panic!("event queue closed while filling it"),
+    }
+  }
 }
 
 #[cfg(test)]

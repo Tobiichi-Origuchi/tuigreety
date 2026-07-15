@@ -32,11 +32,11 @@ use crossterm::{
   execute,
   terminal::{LeaveAlternateScreen, disable_raw_mode},
 };
-use event::Event;
+use event::{Control, Event};
 use greetd_ipc::Request;
 use power::PowerPostAction;
 use ratatui::{Terminal, backend::CrosstermBackend};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, mpsc};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
@@ -58,7 +58,7 @@ async fn main() {
 
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
-  let greeter = Greeter::new(events.sender()).await;
+  let greeter = Greeter::new().await;
   events.set_refresh_rate(greeter.refresh_rate);
 
   if let Err(error) = run(backend, greeter, events).await {
@@ -106,7 +106,7 @@ where
     // screen. This keeps the first visible frame at its final height without
     // guessing whether PAM will ask for a password, MFA token, or other input.
     let mut initial_ipc = ipc.clone();
-    initial_ipc.handle(greeter.clone()).await?;
+    let _ = initial_ipc.handle(greeter.clone()).await?;
   }
 
   #[cfg(not(test))]
@@ -121,13 +121,23 @@ where
   cursor_interval.tick().await;
   let mut cursor_on = true;
 
+  let (control_tx, mut control_rx) = mpsc::unbounded_channel();
+
   tokio::task::spawn({
     let greeter = greeter.clone();
     let mut ipc = ipc.clone();
 
     async move {
       loop {
-        let _ = ipc.handle(greeter.clone()).await;
+        match ipc.handle(greeter.clone()).await {
+          Ok(Some(control)) => {
+            if control_tx.send(control).is_err() {
+              break;
+            }
+          },
+          Ok(None) => {},
+          Err(error) => tracing::error!("greetd IPC request failed: {error}"),
+        }
       }
     }
   });
@@ -139,24 +149,58 @@ where
       return Err(status.into());
     }
 
-    tokio::select! {
-      event = events.next() => match event {
-      Some(Event::Render) => {
+    let control = tokio::select! {
+      biased;
+
+      Some(control) = control_rx.recv() => Some(control),
+
+      _ = cursor_interval.tick() => {
+        cursor_on = !cursor_on;
         ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
-      },
-      Some(Event::Key(key)) => {
-        let requested_exit = keyboard::handle(greeter.clone(), key, ipc.clone()).await?;
-        if let Some(status) = requested_exit {
-          crate::exit(&mut *greeter.write().await, status).await;
-        }
+        None
       },
 
-      Some(Event::Exit(status)) => {
-        crate::exit(&mut *greeter.write().await, status).await;
+      event = events.next() => match event {
+        Some(Event::Render) => {
+          ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
+          None
+        },
+        Some(Event::Key(key)) => keyboard::handle(greeter.clone(), key, ipc.clone()).await?,
+        Some(Event::ReloadConfig) => {
+          let refresh_rate = {
+            let mut greeter = greeter.write().await;
+            match config::reload(greeter.config()) {
+              Ok((settings, warnings)) => {
+                for warning in warnings {
+                  tracing::warn!("configuration reload: {warning}");
+                }
+                for warning in greeter.reload_settings(settings) {
+                  tracing::warn!("configuration reload: {warning}");
+                }
+                Some(greeter.refresh_rate)
+              },
+              Err(warnings) => {
+                for warning in warnings {
+                  tracing::warn!("configuration reload rejected: {warning}");
+                }
+                None
+              },
+            }
+          };
+          if let Some(refresh_rate) = refresh_rate {
+            events.set_refresh_rate(refresh_rate);
+            ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
+          }
+          None
+        },
+        None => None,
       },
+    };
 
-      Some(Event::PowerCommand(command)) => {
-        if let PowerPostAction::ClearScreen = power::run(&greeter, command).await {
+    match control {
+      Some(Control::Exit(status)) => crate::exit(&mut *greeter.write().await, status).await,
+      Some(Control::PowerCommand(command)) => {
+        if let PowerPostAction::ClearScreen = power::run(&greeter, *command).await {
           execute!(io::stdout(), Show, LeaveAlternateScreen)?;
           terminal.set_cursor_position((1, 1))?;
           terminal.clear()?;
@@ -165,41 +209,7 @@ where
           break;
         }
       },
-
-      Some(Event::ReloadConfig) => {
-        let refresh_rate = {
-          let mut greeter = greeter.write().await;
-          match config::reload(greeter.config()) {
-            Ok((settings, warnings)) => {
-              for warning in warnings {
-                tracing::warn!("configuration reload: {warning}");
-              }
-              for warning in greeter.reload_settings(settings) {
-                tracing::warn!("configuration reload: {warning}");
-              }
-              Some(greeter.refresh_rate)
-            },
-            Err(warnings) => {
-              for warning in warnings {
-                tracing::warn!("configuration reload rejected: {warning}");
-              }
-              None
-            },
-          }
-        };
-        if let Some(refresh_rate) = refresh_rate {
-          events.set_refresh_rate(refresh_rate);
-          ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
-        }
-      },
-
-      _ => {},
-      },
-
-      _ = cursor_interval.tick() => {
-        cursor_on = !cursor_on;
-        ui::draw(greeter.clone(), &mut terminal, cursor_on).await?;
-      },
+      None => {},
     }
   }
 

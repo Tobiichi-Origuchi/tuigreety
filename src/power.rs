@@ -2,7 +2,7 @@ use std::{fs, path::Path, process::Stdio, sync::Arc};
 
 use tokio::{process::Command, sync::RwLock};
 
-use crate::{AuthStatus, Greeter, Mode, event::Event, ui::power::Power};
+use crate::{AuthStatus, Greeter, Mode, event::Control, ui::power::Power};
 
 #[derive(SmartDefault, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PowerOption {
@@ -61,12 +61,9 @@ fn default_command_for(option: PowerOption, root: &Path) -> Option<String> {
   }
 }
 
-pub async fn power(greeter: &mut Greeter, option: PowerOption) {
+pub fn power(greeter: &mut Greeter, option: PowerOption) -> Option<Control> {
   if greeter.mock {
-    if let Some(ref sender) = greeter.events {
-      let _ = sender.send(Event::Exit(AuthStatus::Cancel)).await;
-    }
-    return;
+    return Some(Control::Exit(AuthStatus::Cancel));
   }
 
   let command = match greeter.powers.options.iter().find(|opt| opt.action == option) {
@@ -102,11 +99,10 @@ pub async fn power(greeter: &mut Greeter, option: PowerOption) {
     command.stdout(Stdio::null());
     command.stderr(Stdio::null());
 
-    if let Some(ref sender) = greeter.events {
-      let _ = sender.send(Event::PowerCommand(command)).await;
-    }
+    Some(Control::PowerCommand(Box::new(command)))
   } else {
     greeter.message = Some(text!(greeter, command_missing));
+    None
   }
 }
 
@@ -156,11 +152,16 @@ pub async fn run(greeter: &Arc<RwLock<Greeter>>, mut command: Command) -> PowerP
 
 #[cfg(test)]
 mod tests {
-  use std::fs::{self, File};
+  use std::{
+    ffi::OsStr,
+    fs::{self, File},
+    time::Duration,
+  };
 
   use tempfile::tempdir;
 
   use super::*;
+  use crate::event::{Events, fill_event_queue};
 
   #[test]
   fn detects_elogind_from_its_pid_file() {
@@ -216,14 +217,47 @@ mod tests {
   }
 
   #[tokio::test]
-  async fn mock_power_exits_without_running_a_command() {
-    let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+  async fn mock_power_does_not_block_on_a_full_event_queue() {
+    let events = Events::new().await;
+    fill_event_queue(&events);
+
     let mut greeter = Greeter::default();
     greeter.mock = true;
-    greeter.events = Some(sender);
 
-    power(&mut greeter, PowerOption::Shutdown).await;
+    let control = tokio::time::timeout(Duration::from_millis(100), async {
+      power(&mut greeter, PowerOption::Shutdown)
+    })
+    .await
+    .expect("mock power action blocked on the full render/event queue");
 
-    assert!(matches!(receiver.recv().await, Some(Event::Exit(AuthStatus::Cancel))));
+    assert!(matches!(control, Some(Control::Exit(AuthStatus::Cancel))));
+  }
+
+  #[tokio::test]
+  async fn real_power_does_not_block_on_a_full_event_queue() {
+    let events = Events::new().await;
+    fill_event_queue(&events);
+
+    let mut greeter = Greeter::default();
+    greeter.powers.options.push(Power {
+      action: PowerOption::Shutdown,
+      label: "Shutdown".into(),
+      command: Some("shutdown -h now".into()),
+    });
+
+    let control = tokio::time::timeout(Duration::from_millis(100), async {
+      power(&mut greeter, PowerOption::Shutdown)
+    })
+    .await
+    .expect("real power action blocked on the full render/event queue");
+
+    let Some(Control::PowerCommand(command)) = control else {
+      panic!("power selection did not return its command to the main loop");
+    };
+    assert_eq!(command.as_std().get_program(), OsStr::new("shutdown"));
+    assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), [
+      OsStr::new("-h"),
+      OsStr::new("now")
+    ]);
   }
 }

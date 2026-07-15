@@ -11,14 +11,14 @@ use std::{
 use getopts::{Matches, Options};
 use tokio::{
   net::UnixStream,
-  sync::{RwLock, RwLockWriteGuard, mpsc::Sender},
+  sync::{RwLock, RwLockWriteGuard},
 };
 use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
 
 use crate::{
   config::{self, Settings},
-  event::{DEFAULT_REFRESH_RATE, Event},
+  event::DEFAULT_REFRESH_RATE,
   info::{
     get_issue,
     get_last_command,
@@ -236,7 +236,6 @@ pub struct Greeter {
   pub settings: Settings,
   pub socket: String,
   pub stream: Option<Arc<RwLock<UnixStream>>>,
-  pub events: Option<Sender<Event>>,
 
   // Current mode of the application, will define what actions are permitted.
   pub mode: Mode,
@@ -332,10 +331,9 @@ impl Drop for Greeter {
 }
 
 impl Greeter {
-  pub async fn new(events: Sender<Event>) -> Self {
+  pub async fn new() -> Self {
     let mut greeter = Self::default();
 
-    greeter.events = Some(events);
     greeter.powers = Menu {
       title: text!(greeter, title_power),
       options: Default::default(),

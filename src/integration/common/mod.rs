@@ -88,7 +88,7 @@ impl IntegrationRunner {
     wait_for_server(&socket_path, &mut server).await;
 
     let client = tokio::task::spawn(async move {
-      let mut greeter = Greeter::new(events.sender()).await;
+      let mut greeter = Greeter::new().await;
       greeter.session_source = SessionSource::DefaultCommand("uname".to_string(), None);
 
       if let Some(builder) = builder {
@@ -101,7 +101,6 @@ impl IntegrationRunner {
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();
       greeter.socket = socket_path.to_str().unwrap().to_string();
-      greeter.events = Some(events.sender());
       greeter.connect().await;
 
       match crate::run(backend, greeter, events).await {

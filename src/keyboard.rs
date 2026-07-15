@@ -8,6 +8,7 @@ use crate::{
   AuthStatus,
   Greeter,
   Mode,
+  event::Control,
   info::{get_last_user_command, get_last_user_session},
   ipc::Ipc,
   power::power,
@@ -28,7 +29,7 @@ pub async fn handle(
   greeter: Arc<RwLock<Greeter>>,
   input: KeyEvent,
   ipc: Ipc,
-) -> Result<Option<AuthStatus>, Box<dyn Error>> {
+) -> Result<Option<Control>, Box<dyn Error>> {
   let mut greeter = greeter.write().await;
 
   if greeter.working {
@@ -55,7 +56,7 @@ pub async fn handle(
       modifiers: KeyModifiers::CONTROL,
       ..
     } => {
-      return Ok(Some(AuthStatus::Cancel));
+      return Ok(Some(Control::Exit(AuthStatus::Cancel)));
     },
 
     // Depending on the active screen, pressing Escape will either return to the
@@ -286,11 +287,13 @@ pub async fn handle(
       Mode::Power => {
         let power_command = greeter.powers.options.get(greeter.powers.selected).cloned();
 
-        if let Some(command) = power_command {
-          power(&mut greeter, command.action).await;
-        }
+        let control = power_command.and_then(|command| power(&mut greeter, command.action));
 
         greeter.mode = greeter.previous_mode;
+
+        if control.is_some() {
+          return Ok(control);
+        }
       },
 
       _ => {},
@@ -480,13 +483,14 @@ mod test {
   use std::sync::Arc;
 
   use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-  use tokio::sync::RwLock;
+  use tokio::{sync::RwLock, time::Duration};
 
   use super::{Completion, common_prefix, complete_username, handle};
   use crate::{
     AuthStatus,
     Greeter,
     Mode,
+    event::{Control, Events, fill_event_queue},
     ipc::Ipc,
     power::PowerOption,
     ui::{
@@ -545,15 +549,22 @@ mod test {
   }
 
   #[tokio::test]
-  async fn ctrl_x_requests_exit_directly() {
-    let result = handle(
-      Arc::new(RwLock::new(Greeter::default())),
-      KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
-      Ipc::new(),
-    )
-    .await;
+  async fn ctrl_x_does_not_block_on_a_full_event_queue() {
+    let events = Events::new().await;
+    fill_event_queue(&events);
 
-    assert!(matches!(result, Ok(Some(AuthStatus::Cancel))));
+    let result = tokio::time::timeout(
+      Duration::from_millis(100),
+      handle(
+        Arc::new(RwLock::new(Greeter::default())),
+        KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL),
+        Ipc::new(),
+      ),
+    )
+    .await
+    .expect("Ctrl-X blocked on the full render/event queue");
+
+    assert!(matches!(result, Ok(Some(Control::Exit(AuthStatus::Cancel)))));
   }
 
   #[tokio::test]

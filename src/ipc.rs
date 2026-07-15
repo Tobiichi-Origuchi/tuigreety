@@ -11,7 +11,7 @@ use crate::{
   AuthStatus,
   Greeter,
   Mode,
-  event::Event,
+  event::Control,
   info::{
     delete_last_command,
     delete_last_session,
@@ -158,7 +158,7 @@ impl Ipc {
     self.0.rx.lock().await.recv().await
   }
 
-  pub async fn handle(&mut self, greeter: Arc<RwLock<Greeter>>) -> Result<(), Box<dyn Error>> {
+  pub async fn handle(&mut self, greeter: Arc<RwLock<Greeter>>) -> Result<Option<Control>, Box<dyn Error>> {
     let request = self.next().await;
 
     if let Some(request) = request {
@@ -184,13 +184,17 @@ impl Ipc {
         return Err(io::Error::new(io::ErrorKind::NotConnected, "greetd socket is not connected").into());
       };
 
-      self.parse_response(&mut *greeter.write().await, response).await?;
+      return self.parse_response(&mut *greeter.write().await, response).await;
     }
 
-    Ok(())
+    Ok(None)
   }
 
-  async fn parse_response(&mut self, greeter: &mut Greeter, response: Response) -> Result<(), Box<dyn Error>> {
+  async fn parse_response(
+    &mut self,
+    greeter: &mut Greeter,
+    response: Response,
+  ) -> Result<Option<Control>, Box<dyn Error>> {
     self
       .parse_response_with(greeter, response, commit_pending_session)
       .await
@@ -201,10 +205,12 @@ impl Ipc {
     greeter: &mut Greeter,
     response: Response,
     commit: F,
-  ) -> Result<(), Box<dyn Error>>
+  ) -> Result<Option<Control>, Box<dyn Error>>
   where
     F: FnOnce(PendingSession, CachePolicy),
   {
+    let mut control = None;
+
     // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
     match response {
       Response::Error { ref error_type, .. } => tracing::info!("received greetd error message: {error_type:?}"),
@@ -263,9 +269,7 @@ impl Ipc {
             tracing::warn!("session start was acknowledged without a pending session snapshot");
           }
 
-          if let Some(ref sender) = greeter.events {
-            let _ = sender.send(Event::Exit(AuthStatus::Success)).await;
-          }
+          control = Some(Control::Exit(AuthStatus::Success));
         } else {
           tracing::info!("authentication successful, starting session");
 
@@ -351,7 +355,7 @@ impl Ipc {
       },
     }
 
-    Ok(())
+    Ok(control)
   }
 
   pub async fn cancel(greeter: &mut Greeter) {
@@ -450,7 +454,7 @@ fn wrap_session_command<'a>(
 
 #[cfg(test)]
 mod test {
-  use std::{path::PathBuf, sync::Arc};
+  use std::{path::PathBuf, sync::Arc, time::Duration};
 
   use greetd_ipc::{AuthMessageType, ErrorType, Request, Response};
   use tokio::sync::RwLock;
@@ -459,6 +463,7 @@ mod test {
   use crate::{
     Greeter,
     Mode,
+    event::{Control, Events, fill_event_queue},
     ipc::{DefaultCommand, desktop_names_to_xdg},
     ui::{
       common::masked::MaskedString,
@@ -504,6 +509,36 @@ mod test {
     assert_eq!(greeter.mode, Mode::Password);
     assert!(greeter.asking_for_secret);
     assert_eq!(greeter.prompt.as_deref(), Some("Password: "));
+  }
+
+  #[tokio::test]
+  async fn successful_session_exit_does_not_block_on_a_full_event_queue() {
+    let events = Events::new().await;
+    fill_event_queue(&events);
+
+    let mut state = Greeter::default();
+    state.mock = true;
+    state.done = true;
+    state.pending_session = Some(super::PendingSession {
+      username: "test".into(),
+      display_name: None,
+      selection: CachedSession::None,
+    });
+    let greeter = Arc::new(RwLock::new(state));
+    let mut ipc = Ipc::new();
+    ipc
+      .send(Request::StartSession {
+        cmd: vec!["true".into()],
+        env: Vec::new(),
+      })
+      .await;
+
+    let control = tokio::time::timeout(Duration::from_millis(100), ipc.handle(greeter))
+      .await
+      .expect("successful authentication blocked on the full render/event queue")
+      .unwrap();
+
+    assert!(matches!(control, Some(Control::Exit(crate::AuthStatus::Success))));
   }
 
   #[tokio::test]
