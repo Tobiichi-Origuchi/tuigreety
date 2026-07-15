@@ -9,6 +9,7 @@ url='https://github.com/Tobiichi-Origuchi/tuigreety'
 license=('GPL-3.0-or-later')
 provides=('greetd-greeter' "greetd-tuigreety=$pkgver" "tuigreety=$pkgver")
 conflicts=('greetd-tuigreet' 'greetd-tuigreety' 'greetd-tuigreety-git' 'tuigreety' 'tuigreety-bin' 'tuigreety-git')
+depends=('glibc' 'libgcc' 'greetd')
 backup=('etc/tuigreet/config.toml')
 source_x86_64=("$pkgname-$pkgver-x86_64.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-x86_64.tar.gz")
 source_aarch64=("$pkgname-$pkgver-aarch64.tar.gz::$url/releases/download/$pkgver/tuigreety-$pkgver-aarch64.tar.gz")
@@ -22,7 +23,6 @@ sha256sums_armv7h=('SKIP')
 sha256sums_i686=('SKIP')
 
 package() {
-  depends=('gcc-libs' 'greetd')
   local release_arch="$CARCH"
   [[ $CARCH == armv7h ]] && release_arch=armv7
   cd "tuigreety-$pkgver-$release_arch"

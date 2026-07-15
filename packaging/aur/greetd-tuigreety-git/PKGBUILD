@@ -10,6 +10,7 @@ license=('GPL-3.0-or-later')
 provides=('greetd-greeter' 'greetd-tuigreety' 'tuigreety')
 conflicts=('greetd-tuigreet' 'greetd-tuigreety' 'greetd-tuigreety-bin' 'tuigreety' 'tuigreety-bin' 'tuigreety-git')
 makedepends=('git' 'rust' 'scdoc')
+depends=('glibc' 'libgcc' 'greetd')
 backup=('etc/tuigreet/config.toml')
 source=('git+https://github.com/Tobiichi-Origuchi/tuigreety.git' 'tuigreet.conf')
 sha256sums=('SKIP' 'SKIP')
@@ -32,7 +33,6 @@ build() {
 }
 
 package() {
-  depends=('gcc-libs' 'greetd')
   cd tuigreety
   install -Dm755 target/release/tuigreet "$pkgdir/usr/bin/tuigreet"
   install -Dm644 tuigreet.1 "$pkgdir/usr/share/man/man1/tuigreet.1"
