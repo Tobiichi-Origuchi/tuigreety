@@ -31,6 +31,7 @@ use crate::{
     get_sessions,
     get_users,
   },
+  ipc::PendingSession,
   power::PowerOption,
   text::Text,
   ui::{
@@ -131,6 +132,8 @@ pub struct Greeter {
 
   // Define the selected session and how to resolve it.
   pub session_source: SessionSource,
+  // Whether unauthenticated users may replace the session with an arbitrary command.
+  pub allow_command_editor: bool,
   // List of session files found on disk.
   pub session_paths: Vec<(PathBuf, SessionType)>,
   // Menu for session selection.
@@ -195,6 +198,8 @@ pub struct Greeter {
   pub working: bool,
   // We are done working.
   pub done: bool,
+  // Immutable state captured when the StartSession request is sent.
+  pub(crate) pending_session: Option<PendingSession>,
   // Should we exit?
   pub exit: Option<AuthStatus>,
 }
@@ -250,21 +255,35 @@ impl Greeter {
       selected: 0,
     };
 
+    // Free-form command caches created by older releases must not become active
+    // again if an administrator later enables command remembering.
+    #[cfg(not(test))]
+    if !greeter.allow_command_editor {
+      crate::info::delete_last_command();
+    }
+
     // If we should remember the last logged-in user.
     if greeter.remember
       && let Some(username) = get_last_user_username()
     {
       greeter.username = MaskedString::from(username, get_last_user_name());
 
+      #[cfg(not(test))]
+      if !greeter.allow_command_editor {
+        crate::info::delete_last_user_command(&greeter.username.value);
+      }
+
       // If, on top of that, we should remember their last session.
       if greeter.remember_user_session {
         // See if we have the last free-form command from the user.
-        if let Ok(command) = get_last_user_command(greeter.username.get()) {
+        if greeter.allow_command_editor
+          && let Ok(command) = get_last_user_command(&greeter.username.value)
+        {
           greeter.session_source = SessionSource::Command(command);
         }
 
         // If a session was saved, use it and its name.
-        if let Ok(ref session_path) = get_last_user_session(greeter.username.get()) {
+        if let Ok(ref session_path) = get_last_user_session(&greeter.username.value) {
           // Set the selected menu option and the session source.
           if let Some(index) = greeter
             .sessions
@@ -283,7 +302,9 @@ impl Greeter {
 
     // Same thing, but not user specific.
     if greeter.remember_session {
-      if let Ok(command) = get_last_command() {
+      if greeter.allow_command_editor
+        && let Ok(command) = get_last_command()
+      {
         greeter.session_source = SessionSource::Command(command.trim().to_string());
       }
 
@@ -330,6 +351,7 @@ impl Greeter {
 
     self.working = false;
     self.done = false;
+    self.pending_session = None;
 
     self.scrub(false, soft);
     self.connect().await;
@@ -432,6 +454,16 @@ impl Greeter {
       "FILE",
     );
     opts.optopt("c", "cmd", "command to run", "COMMAND");
+    opts.optflag(
+      "",
+      "allow-command-editor",
+      "allow unauthenticated users to replace the session command (unsafe)",
+    );
+    opts.optflag(
+      "",
+      "no-command-editor",
+      "disable the command editor, overriding configuration",
+    );
     opts.optmulti(
       "",
       "env",
@@ -625,6 +657,7 @@ impl Greeter {
     self.remember = settings.remember;
     self.remember_session = settings.remember_session;
     self.remember_user_session = settings.remember_user_session;
+    self.allow_command_editor = settings.allow_command_editor;
     self.greeting = settings.greeting.clone();
 
     // If the `--cmd` argument is provided, it will override the selected session.
@@ -735,6 +768,19 @@ impl Greeter {
     self.remember = settings.remember;
     self.remember_session = settings.remember_session;
     self.remember_user_session = settings.remember_user_session;
+    self.allow_command_editor = settings.allow_command_editor;
+    if !self.allow_command_editor && self.mode == Mode::Command {
+      self.buffer = self.previous_buffer.take().unwrap_or_default();
+      self.cursor_offset = 0;
+      self.mode = self.previous_mode;
+    }
+    #[cfg(not(test))]
+    if !self.allow_command_editor {
+      crate::info::delete_last_command();
+      if !self.username.value.is_empty() {
+        crate::info::delete_last_user_command(&self.username.value);
+      }
+    }
     self.greeting.clone_from(&settings.greeting);
     if settings.issue {
       self.greeting = get_issue();
@@ -764,6 +810,12 @@ impl Greeter {
     if let Some(command) = settings.command.clone() {
       let environment = (!settings.environment.is_empty()).then(|| settings.environment.clone());
       self.session_source = SessionSource::DefaultCommand(command, environment);
+    } else if !self.allow_command_editor && matches!(&self.session_source, SessionSource::Command(_)) {
+      self.session_source = if self.sessions.options.is_empty() {
+        SessionSource::None
+      } else {
+        SessionSource::Session(0)
+      };
     } else if selected_path.is_some() && !self.sessions.options.is_empty() {
       self.session_source = SessionSource::Session(self.sessions.selected);
     } else if selected_path.is_some() {
@@ -962,6 +1014,7 @@ mod test {
   use super::{mock_sessions, parse_options_ignoring_invalid, print_information};
   use crate::{
     Greeter,
+    Mode,
     SecretDisplay,
     ui::{
       common::menu::Menu,
@@ -1005,6 +1058,11 @@ mod test {
     greeter.debug = true;
     greeter.logfile = "/tmp/original.log".into();
     greeter.mock = true;
+    greeter.allow_command_editor = true;
+    greeter.mode = Mode::Command;
+    greeter.previous_mode = Mode::Username;
+    greeter.buffer = "untrusted command".into();
+    greeter.previous_buffer = Some("username buffer".into());
     let mut settings = crate::config::Settings {
       debug: false,
       logfile: "/tmp/reloaded.log".into(),
@@ -1024,6 +1082,9 @@ mod test {
     assert!(greeter.debug);
     assert_eq!(greeter.logfile, "/tmp/original.log");
     assert!(greeter.mock);
+    assert!(!greeter.allow_command_editor);
+    assert_eq!(greeter.mode, Mode::Username);
+    assert_eq!(greeter.buffer, "username buffer");
     assert!(greeter.time);
     assert_eq!(greeter.refresh_rate, 60);
     assert!(matches!(greeter.secret_display, SecretDisplay::Character(ref value) if value == "#"));
@@ -1133,6 +1194,11 @@ mod test {
       (&[], true, None),
       // Valid combinations
       (&["--cmd", "hello"], true, None),
+      (
+        &["--allow-command-editor"],
+        true,
+        Some(|greeter| assert!(greeter.allow_command_editor)),
+      ),
       (
         &[
           "--time",

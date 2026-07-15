@@ -8,14 +8,7 @@ use crate::{
   AuthStatus,
   Greeter,
   Mode,
-  info::{
-    delete_last_command,
-    delete_last_session,
-    get_last_user_command,
-    get_last_user_session,
-    write_last_command,
-    write_last_session_path,
-  },
+  info::{get_last_user_command, get_last_user_session},
   ipc::Ipc,
   power::power,
   ui::{
@@ -98,7 +91,7 @@ pub async fn handle(
     // screen.
     KeyEvent {
       code: KeyCode::F(i), ..
-    } if i == greeter.kb_command => {
+    } if i == greeter.kb_command && greeter.allow_command_editor => {
       greeter.previous_mode = match greeter.mode {
         Mode::Users | Mode::Command | Mode::Sessions | Mode::Power => greeter.previous_mode,
         _ => greeter.mode,
@@ -254,16 +247,17 @@ pub async fn handle(
         greeter.buffer = String::new();
       },
 
-      Mode::Command => {
+      Mode::Command if greeter.allow_command_editor => {
         greeter.sessions.selected = 0;
         greeter.session_source = SessionSource::Command(greeter.buffer.clone());
 
-        if greeter.remember_session {
-          write_last_command(&greeter.buffer);
-          delete_last_session();
-        }
-
         greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
+        greeter.mode = greeter.previous_mode;
+      },
+
+      Mode::Command => {
+        greeter.buffer = greeter.previous_buffer.take().unwrap_or_default();
+        greeter.cursor_offset = 0;
         greeter.mode = greeter.previous_mode;
       },
 
@@ -282,14 +276,7 @@ pub async fn handle(
       Mode::Sessions => {
         let session = greeter.sessions.options.get(greeter.sessions.selected).cloned();
 
-        if let Some(Session { path, .. }) = session {
-          if greeter.remember_session
-            && let Some(ref path) = path
-          {
-            write_last_session_path(path);
-            delete_last_command();
-          }
-
+        if session.is_some() {
           greeter.session_source = SessionSource::Session(greeter.sessions.selected);
         }
 
@@ -458,6 +445,11 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
     .await;
   greeter.buffer = String::new();
 
+  #[cfg(not(test))]
+  if !greeter.allow_command_editor {
+    crate::info::delete_last_user_command(&greeter.username.value);
+  }
+
   if greeter.remember_user_session {
     if let Ok(last_session) = get_last_user_session(&greeter.username.value)
       && let Some(last_session) = Session::from_path(greeter, last_session).cloned()
@@ -473,7 +465,9 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
       greeter.session_source = SessionSource::Session(greeter.sessions.selected);
     }
 
-    if let Ok(command) = get_last_user_command(&greeter.username.value) {
+    if greeter.allow_command_editor
+      && let Ok(command) = get_last_user_command(&greeter.username.value)
+    {
       tracing::info!("remembered user command is {}", command);
 
       greeter.session_source = SessionSource::Command(command);
@@ -725,6 +719,7 @@ mod test {
 
     {
       let mut greeter = greeter.write().await;
+      greeter.allow_command_editor = true;
       greeter.mode = Mode::Username;
       greeter.buffer = "apognu".to_string();
       greeter.session_source = SessionSource::Command("thecommand".to_string());
@@ -771,11 +766,55 @@ mod test {
   }
 
   #[tokio::test]
+  async fn command_editor_is_disabled_by_default() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+
+    let result = handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::F(2), KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(greeter.read().await.mode, Mode::Username);
+  }
+
+  #[tokio::test]
+  async fn disabled_command_mode_cannot_replace_the_session_source() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut greeter = greeter.write().await;
+      greeter.session_source = SessionSource::DefaultCommand("safe-command".into(), None);
+      greeter.previous_mode = Mode::Username;
+      greeter.previous_buffer = Some("username".into());
+      greeter.mode = Mode::Command;
+      greeter.buffer = "untrusted-command".into();
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+
+    let greeter = greeter.read().await;
+    assert!(
+      matches!(&greeter.session_source, SessionSource::DefaultCommand(command, None) if command == "safe-command")
+    );
+    assert_eq!(greeter.mode, Mode::Username);
+    assert_eq!(greeter.buffer, "username");
+  }
+
+  #[tokio::test]
   async fn f_menu() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
 
     {
       let mut greeter = greeter.write().await;
+      greeter.allow_command_editor = true;
       greeter.sessions.options.push(Session::default());
       greeter.powers.options.push(Power {
         action: PowerOption::Shutdown,
@@ -841,6 +880,7 @@ mod test {
     for (key, mode) in [(KeyCode::F(1), Mode::Sessions), (KeyCode::F(11), Mode::Power)] {
       {
         let mut greeter = greeter.write().await;
+        greeter.allow_command_editor = true;
         greeter.kb_command = 3;
         greeter.kb_sessions = 1;
         greeter.kb_power = 11;

@@ -16,6 +16,10 @@
 [session]
 # Command selected at startup instead of the first discovered session (example).
 # command = "sway"
+# Let anyone at the greeter replace the session with an arbitrary command using F2.
+# This command runs as the next authenticated user. Keep this disabled unless all
+# people with physical access are trusted.
+# allow-command-editor = false
 # Environment entries passed with command; each item must be KEY=VALUE.
 # environment = ["XDG_CURRENT_DESKTOP=sway"]
 # Directories containing Wayland .desktop session files. Empty uses XDG defaults.
@@ -58,9 +62,9 @@
 [remember]
 # Pre-fill the last successfully authenticated username.
 # username = false
-# Restore the last successful session or manually entered command globally.
+# Restore the last successfully started session or manually entered command globally.
 # session = false
-# Restore the last successful session per username; also enables username.
+# Restore the last successfully started session per username; also enables username.
 # user-session = false
 
 [users]

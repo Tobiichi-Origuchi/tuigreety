@@ -106,13 +106,19 @@ where
 
     let session_source = greeter.session_source.label(&greeter).unwrap_or("-");
 
-    let status_left_text = Line::from(vec![
+    let mut status_left_spans = vec![
       status_label(theme, "ESC"),
       status_value(&greeter, theme, Button::Other, text!(greeter, action_reset)),
       Span::from(" "),
-      status_label(theme, format!("F{}", greeter.kb_command)),
-      status_value(&greeter, theme, Button::Command, text!(greeter, action_command)),
-      Span::from(" "),
+    ];
+    if greeter.allow_command_editor {
+      status_left_spans.extend([
+        status_label(theme, format!("F{}", greeter.kb_command)),
+        status_value(&greeter, theme, Button::Command, text!(greeter, action_command)),
+        Span::from(" "),
+      ]);
+    }
+    status_left_spans.extend([
       status_label(theme, format!("F{}", greeter.kb_sessions)),
       status_value(&greeter, theme, Button::Session, text!(greeter, action_session)),
       Span::from(" "),
@@ -122,6 +128,7 @@ where
       status_label(theme, session_source_label),
       status_value(&greeter, theme, Button::Other, session_source),
     ]);
+    let status_left_text = Line::from(status_left_spans);
     let status_left = Paragraph::new(status_left_text);
 
     f.render_widget(status_left, status_chunks[STATUSBAR_LEFT_INDEX]);

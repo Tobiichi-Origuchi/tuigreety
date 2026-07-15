@@ -16,6 +16,11 @@ Options:
     -d, --debug [FILE]  enable debug logging to the provided file, or to
                         /tmp/tuigreet.log
     -c, --cmd COMMAND   command to run
+        --allow-command-editor
+                        allow unauthenticated users to replace the session
+                        command (unsafe)
+        --no-command-editor
+                        disable the command editor, overriding configuration
         --env KEY=VALUE environment variables to run the default session with
                         (can appear more than once)
     -s, --sessions DIRS colon-separated list of Wayland session paths
@@ -89,9 +94,11 @@ The default configuration tends to be as minimal as possible, visually speaking,
 
 The initial prompt container will be 80 column wide. You may change this with `--width` in case you need more space (for example, to account for large PAM challenge messages). Please refer to usage information (`--help`) for more customization options. Various padding settings are available through the `*-padding` options.
 
-You can instruct `tuigreet` to remember the last username that successfully opened a session with the `--remember` option (that way, the username field will be pre-filled). Similarly, the command and session configuration can be retained between runs with the `--remember-session` option (when using this, the `--cmd` value is overridden by manual selections). You can also remember the selected session per user with the `--remember-user-session` flag. In this case, the selected session will only be saved on successful authentication. Check the [cache instructions](#cache-instructions) if `/var/cache/tuigreet` doesn't exist after installing tuigreet.
+You can instruct `tuigreet` to remember the last username that successfully opened a session with the `--remember` option (that way, the username field will be pre-filled). Similarly, the selected session can be retained between runs with the `--remember-session` option. You can also remember it per user with `--remember-user-session`. Username and session caches are updated only after greetd confirms that the selected session was started; authentication failures and cancellations do not change them. Check the [cache instructions](#cache-instructions) if `/var/cache/tuigreet` doesn't exist after installing tuigreet.
 
-You may change the command that will be executed after opening a session by hitting `F2` and amending the command. Alternatively, you can list the system-declared sessions (or custom ones) by hitting `F3`. Power options are available through `F12`.
+By default, the session command can only come from administrator configuration or an installed session file. You can list those sessions with `F3`; power options are available through `F12`.
+
+The administrator can restore the legacy `F2` command editor with `--allow-command-editor` or `session.allow-command-editor = true`. This is intentionally disabled by default: anyone who can reach the greeter can use it to choose arbitrary code that will run as the next user who successfully authenticates, without another confirmation after authentication. Enable it only when every person with physical access is trusted. Free-form command caches are ignored while the editor is disabled; the global cache and per-user entries encountered during login are removed.
 
 ## Install
 
@@ -173,7 +180,7 @@ refresh-rate = 30
 autocomplete = true
 ```
 
-Commands and environment values in configuration files are not secrets; protect the files appropriately if they contain sensitive data.
+Commands and environment values are stored as plain text; do not put credentials in them and protect the files appropriately.
 
 ### greetd configuration
 

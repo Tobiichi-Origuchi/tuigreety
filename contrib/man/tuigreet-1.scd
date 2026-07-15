@@ -31,7 +31,17 @@ tuigreet - A graphical console greeter for greetd
 
 *-c, --cmd CMD*
 	Specify which command to run on successful authentication. This can be
-	overridden by manual selection within *tuigreet*.
+	overridden by selecting an installed session within *tuigreet*.
+
+*--allow-command-editor*
+	Enable the F-key editor that lets an unauthenticated user replace the session
+	with an arbitrary command. The command runs as the next user who successfully
+	authenticates, without another confirmation after authentication. This is
+	disabled by default and should only be enabled when all people with physical
+	access are trusted.
+
+*--no-command-editor*
+	Disable the command editor, overriding a configuration file that enabled it.
 
 *--env KEY=VALUE*
 	Environment variables to run the default session with (can appear more then once).
@@ -99,11 +109,12 @@ tuigreet - A graphical console greeter for greetd
 	username field will be pre-filled on the next run.
 
 *--remember-session*
-	Remember the last selected session, effectively overriding the given *--cmd*
-	option on subsequent runs.
+	Remember the last session acknowledged as started by greetd. Authentication
+	failures and cancellations do not update the cache.
 
 *--remember-user-session*
-	Remember the last opened session, per user (requires *--remember*).
+	Remember the last session acknowledged as started by greetd, per user
+	(requires *--remember*).
 
 *--theme SPEC*
 	Define colors to be used to draw the UI components. You can find the proper
@@ -156,7 +167,7 @@ tuigreet - A graphical console greeter for greetd
 
 *--kb-[command|sessions|power] [1-12]*
 	change the default F-key keybindings to access the command, sessions and power
-	menus.
+	menus. The command binding is inactive unless *--allow-command-editor* is set.
 
 # CONFIGURATION
 

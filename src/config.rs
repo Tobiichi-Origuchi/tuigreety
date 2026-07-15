@@ -22,6 +22,7 @@ pub struct Settings {
   pub debug: bool,
   pub logfile: String,
   pub command: Option<String>,
+  pub allow_command_editor: bool,
   pub environment: Vec<String>,
   pub sessions: Vec<String>,
   pub xsessions: Vec<String>,
@@ -64,6 +65,7 @@ impl Default for Settings {
       debug: false,
       logfile: DEFAULT_LOG_FILE.into(),
       command: None,
+      allow_command_editor: false,
       environment: Vec::new(),
       sessions: Vec::new(),
       xsessions: Vec::new(),
@@ -107,6 +109,7 @@ struct Layer {
   debug: Option<bool>,
   logfile: Option<String>,
   command: Option<Option<String>>,
+  allow_command_editor: Option<bool>,
   environment: Option<Vec<String>>,
   sessions: Option<Vec<String>>,
   xsessions: Option<Vec<String>>,
@@ -330,6 +333,7 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
     debug,
     logfile,
     command,
+    allow_command_editor,
     environment,
     sessions,
     xsessions,
@@ -444,6 +448,16 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
     layer.logfile = Some(path);
   }
   layer.command = string("cmd").map(Some);
+  if matches.opt_present("allow-command-editor") && matches.opt_present("no-command-editor") {
+    warnings.push(
+      "command line: --allow-command-editor conflicts with --no-command-editor; keeping the editor disabled".into(),
+    );
+  }
+  layer.allow_command_editor = if matches.opt_present("no-command-editor") {
+    Some(false)
+  } else {
+    flag("allow-command-editor")
+  };
   if matches.opt_present("env") {
     layer.environment = Some(valid_environment(matches.opt_strs("env"), "command line", warnings));
   }
@@ -547,6 +561,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   if let Some(table) = read_table(document.as_table(), "session", path, source, warnings) {
     const KEYS: &[&str] = &[
       "command",
+      "allow-command-editor",
       "environment",
       "sessions",
       "xsessions",
@@ -555,6 +570,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     ];
     warn_unknown(table, KEYS, path, source, warnings, "session");
     layer.command = read_optional_string(table, "command", path, source, warnings, "session");
+    layer.allow_command_editor = read_bool(table, "allow-command-editor", path, source, warnings, "session");
     layer.environment = read_strings(table, "environment", path, source, warnings, "session")
       .map(|values| valid_environment(values, &path.display().to_string(), warnings));
     layer.sessions = read_strings(table, "sessions", path, source, warnings, "session");
@@ -1073,6 +1089,33 @@ mod tests {
 
   fn write(path: &Path, contents: &str) {
     fs::write(path, contents).unwrap();
+  }
+
+  #[test]
+  fn command_editor_requires_explicit_opt_in() {
+    let (defaults, warnings) = load_paths(None, None, &matches(&[]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!defaults.allow_command_editor);
+
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write(&config, "[session]\nallow-command-editor = true\n");
+    let (from_file, warnings) = load_paths(Some(&config), None, &matches(&[]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(from_file.allow_command_editor);
+
+    let (from_cli, warnings) = load_paths(None, None, &matches(&["--allow-command-editor"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(from_cli.allow_command_editor);
+
+    let (disabled_by_cli, warnings) = load_paths(Some(&config), None, &matches(&["--no-command-editor"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!disabled_by_cli.allow_command_editor);
+
+    let (conflicting_cli, warnings) =
+      load_paths(None, None, &matches(&["--allow-command-editor", "--no-command-editor"]));
+    assert!(!conflicting_cli.allow_command_editor);
+    assert!(warnings.iter().any(|warning| warning.contains("conflicts")));
   }
 
   #[test]

@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error, io, sync::Arc};
+use std::{borrow::Cow, error::Error, io, path::PathBuf, sync::Arc};
 
 use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
 use tokio::sync::{
@@ -13,15 +13,122 @@ use crate::{
   Mode,
   event::Event,
   info::{
+    delete_last_command,
+    delete_last_session,
     delete_last_user_command,
     delete_last_user_session,
+    write_last_command,
+    write_last_session_path,
     write_last_user_command,
     write_last_user_session,
     write_last_username,
   },
   macros::SafeDebug,
-  ui::sessions::{Session, SessionSource, SessionType},
+  ui::{
+    common::masked::MaskedString,
+    sessions::{Session, SessionSource, SessionType},
+  },
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum CachedSession {
+  Command(String),
+  Session(PathBuf),
+  None,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct PendingSession {
+  username: String,
+  display_name: Option<String>,
+  selection: CachedSession,
+}
+
+#[derive(Clone, Copy)]
+struct CachePolicy {
+  remember_username: bool,
+  remember_session: bool,
+  remember_user_session: bool,
+  allow_command_editor: bool,
+}
+
+impl CachePolicy {
+  fn current(greeter: &Greeter) -> Self {
+    Self {
+      remember_username: greeter.remember,
+      remember_session: greeter.remember_session,
+      remember_user_session: greeter.remember_user_session,
+      allow_command_editor: greeter.allow_command_editor,
+    }
+  }
+}
+
+impl PendingSession {
+  fn capture(greeter: &Greeter) -> Self {
+    let selection = match &greeter.session_source {
+      SessionSource::Command(command) if greeter.allow_command_editor => CachedSession::Command(command.clone()),
+      SessionSource::Session(index) => greeter
+        .sessions
+        .options
+        .get(*index)
+        .and_then(|session| session.path.clone())
+        .map_or(CachedSession::None, CachedSession::Session),
+      _ => CachedSession::None,
+    };
+
+    Self {
+      username: greeter.username.value.clone(),
+      display_name: greeter.username.mask.clone(),
+      selection,
+    }
+  }
+}
+
+fn commit_pending_session(pending: PendingSession, policy: CachePolicy) {
+  if policy.remember_username {
+    write_last_username(&MaskedString::from(pending.username.clone(), pending.display_name));
+  }
+
+  let ignored_command = CachedSession::None;
+  let selection = match &pending.selection {
+    CachedSession::Command(_) if !policy.allow_command_editor => &ignored_command,
+    selection => selection,
+  };
+
+  if policy.remember_session {
+    match selection {
+      CachedSession::Command(command) => {
+        write_last_command(command);
+        delete_last_session();
+      },
+      CachedSession::Session(path) => {
+        write_last_session_path(path);
+        delete_last_command();
+      },
+      CachedSession::None => {
+        delete_last_command();
+        delete_last_session();
+      },
+    }
+  }
+
+  if policy.remember_user_session {
+    match selection {
+      CachedSession::Command(command) => {
+        write_last_user_command(&pending.username, command);
+        delete_last_user_session(&pending.username);
+      },
+      CachedSession::Session(path) => {
+        write_last_user_session(&pending.username, path);
+        delete_last_user_command(&pending.username);
+      },
+      CachedSession::None => {
+        delete_last_user_command(&pending.username);
+        delete_last_user_session(&pending.username);
+      },
+    }
+  }
+}
 
 #[derive(Clone)]
 pub struct Ipc(Arc<IpcHandle>);
@@ -84,6 +191,20 @@ impl Ipc {
   }
 
   async fn parse_response(&mut self, greeter: &mut Greeter, response: Response) -> Result<(), Box<dyn Error>> {
+    self
+      .parse_response_with(greeter, response, commit_pending_session)
+      .await
+  }
+
+  async fn parse_response_with<F>(
+    &mut self,
+    greeter: &mut Greeter,
+    response: Response,
+    commit: F,
+  ) -> Result<(), Box<dyn Error>>
+  where
+    F: FnOnce(PendingSession, CachePolicy),
+  {
     // Do not display actual message from greetd, which may contain entered information, sometimes passwords.
     match response {
       Response::Error { ref error_type, .. } => tracing::info!("received greetd error message: {error_type:?}"),
@@ -136,36 +257,10 @@ impl Ipc {
         if greeter.done {
           tracing::info!("greetd acknowledged session start, exiting");
 
-          if greeter.remember {
-            tracing::info!("caching last successful username");
-
-            write_last_username(&greeter.username);
-
-            if greeter.remember_user_session {
-              match greeter.session_source {
-                SessionSource::Command(ref command) => {
-                  tracing::info!("caching last user command: {command}");
-
-                  write_last_user_command(&greeter.username.value, command);
-                  delete_last_user_session(&greeter.username.value);
-                },
-
-                SessionSource::Session(index) => {
-                  if let Some(Session {
-                    path: Some(session_path),
-                    ..
-                  }) = greeter.sessions.options.get(index)
-                  {
-                    tracing::info!("caching last user session: {session_path:?}");
-
-                    write_last_user_session(&greeter.username.value, session_path);
-                    delete_last_user_command(&greeter.username.value);
-                  }
-                },
-
-                _ => {},
-              }
-            }
+          if let Some(pending) = greeter.pending_session.take() {
+            commit(pending, CachePolicy::current(greeter));
+          } else {
+            tracing::warn!("session start was acknowledged without a pending session snapshot");
           }
 
           if let Some(ref sender) = greeter.events {
@@ -174,7 +269,15 @@ impl Ipc {
         } else {
           tracing::info!("authentication successful, starting session");
 
-          match greeter.session_source.command(greeter).map(str::to_string) {
+          let command = if !greeter.allow_command_editor && matches!(&greeter.session_source, SessionSource::Command(_))
+          {
+            tracing::warn!("refusing a free-form session command because the command editor is disabled");
+            None
+          } else {
+            greeter.session_source.command(greeter).map(str::to_string)
+          };
+
+          match command {
             None => {
               Ipc::cancel(greeter).await;
 
@@ -196,6 +299,7 @@ impl Ipc {
               let session = Session::get_selected(greeter);
               let default = DefaultCommand(&command, greeter.session_source.env());
               let (command, env) = wrap_session_command(greeter, session, &default);
+              greeter.pending_session = Some(PendingSession::capture(greeter));
 
               #[cfg(not(debug_assertions))]
               self
@@ -348,15 +452,18 @@ fn wrap_session_command<'a>(
 mod test {
   use std::{path::PathBuf, sync::Arc};
 
-  use greetd_ipc::{AuthMessageType, Request, Response};
+  use greetd_ipc::{AuthMessageType, ErrorType, Request, Response};
   use tokio::sync::RwLock;
 
-  use super::{Ipc, mock_response, wrap_session_command};
+  use super::{CachedSession, Ipc, mock_response, wrap_session_command};
   use crate::{
     Greeter,
     Mode,
     ipc::{DefaultCommand, desktop_names_to_xdg},
-    ui::sessions::{Session, SessionType},
+    ui::{
+      common::masked::MaskedString,
+      sessions::{Session, SessionSource, SessionType},
+    },
   };
 
   #[test]
@@ -407,6 +514,132 @@ mod test {
     ipc.send(Request::CancelSession).await;
 
     assert!(ipc.handle(greeter).await.is_err());
+  }
+
+  #[tokio::test]
+  async fn session_cache_uses_the_acknowledged_start_snapshot() {
+    let mut greeter = Greeter::default();
+    greeter.mock = true;
+    greeter.allow_command_editor = true;
+    greeter.remember = true;
+    greeter.remember_session = true;
+    greeter.username = MaskedString::from("original-user".into(), Some("Original User".into()));
+    greeter.session_source = SessionSource::Command("original-command".into());
+    let mut ipc = Ipc::new();
+    let committed = Arc::new(std::sync::Mutex::new(Vec::new()));
+
+    ipc
+      .parse_response_with(&mut greeter, Response::Success, {
+        let committed = Arc::clone(&committed);
+        move |pending, policy| {
+          committed.lock().unwrap().push((
+            pending,
+            (
+              policy.remember_username,
+              policy.remember_session,
+              policy.remember_user_session,
+              policy.allow_command_editor,
+            ),
+          ));
+        }
+      })
+      .await
+      .unwrap();
+
+    assert!(committed.lock().unwrap().is_empty());
+    assert!(greeter.done);
+    assert!(greeter.pending_session.is_some());
+
+    greeter.username = MaskedString::from("changed-user".into(), None);
+    greeter.session_source = SessionSource::Command("changed-command".into());
+    greeter.remember = false;
+    greeter.remember_session = false;
+    greeter.remember_user_session = true;
+    greeter.allow_command_editor = false;
+
+    ipc
+      .parse_response_with(&mut greeter, Response::Success, {
+        let committed = Arc::clone(&committed);
+        move |pending, policy| {
+          committed.lock().unwrap().push((
+            pending,
+            (
+              policy.remember_username,
+              policy.remember_session,
+              policy.remember_user_session,
+              policy.allow_command_editor,
+            ),
+          ));
+        }
+      })
+      .await
+      .unwrap();
+
+    let committed = committed.lock().unwrap();
+    assert_eq!(committed.len(), 1);
+    assert_eq!(committed[0].0.username, "original-user");
+    assert_eq!(committed[0].0.display_name.as_deref(), Some("Original User"));
+    assert_eq!(
+      &committed[0].0.selection,
+      &CachedSession::Command("original-command".into())
+    );
+    assert_eq!(committed[0].1, (false, false, true, false));
+    assert!(greeter.pending_session.is_none());
+  }
+
+  #[tokio::test]
+  async fn failed_session_start_discards_the_cache_snapshot() {
+    let mut greeter = Greeter::default();
+    greeter.mock = true;
+    greeter.allow_command_editor = true;
+    greeter.remember_session = true;
+    greeter.session_source = SessionSource::Command("do-not-cache".into());
+    let mut ipc = Ipc::new();
+    let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+    ipc
+      .parse_response_with(&mut greeter, Response::Success, |_, _| unreachable!())
+      .await
+      .unwrap();
+    assert!(greeter.pending_session.is_some());
+
+    ipc
+      .parse_response_with(
+        &mut greeter,
+        Response::Error {
+          error_type: ErrorType::Error,
+          description: "start failed".into(),
+        },
+        {
+          let commits = Arc::clone(&commits);
+          move |_, _| {
+            commits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+          }
+        },
+      )
+      .await
+      .unwrap();
+
+    assert_eq!(commits.load(std::sync::atomic::Ordering::Relaxed), 0);
+    assert!(greeter.pending_session.is_none());
+    assert!(!greeter.done);
+  }
+
+  #[tokio::test]
+  async fn disabled_command_editor_rejects_free_form_sources() {
+    let mut greeter = Greeter::default();
+    greeter.mock = true;
+    greeter.session_source = SessionSource::Command("untrusted-command".into());
+    let mut ipc = Ipc::new();
+
+    ipc
+      .parse_response_with(&mut greeter, Response::Success, |_, _| unreachable!())
+      .await
+      .unwrap();
+
+    assert!(!greeter.done);
+    assert!(greeter.pending_session.is_none());
+    assert_eq!(greeter.mode, Mode::Username);
   }
 
   #[test]
