@@ -129,7 +129,7 @@ Cache directory must be created for `--remember*` features to work. The director
 
 ### From Arch Linux
 
-The original project remains available from Arch Linux's official repositories as `greetd-tuigreet`. This fork is published to the AUR in three variants:
+The original project remains available from Arch Linux's official repositories as `greetd-tuigreet`. Tuigreety is published to the AUR in three variants:
 
 - `greetd-tuigreety` builds the latest tagged release locally.
 - `greetd-tuigreety-bin` installs the prebuilt release binary.
@@ -139,7 +139,7 @@ All three install `/usr/bin/tuigreet` and `/etc/tuigreet/config.toml`, provide `
 
 ### Pre-built binaries
 
-Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each archive is a staged root filesystem containing `usr/bin/tuigreet`, the man page, project documentation, license, tmpfiles configuration, and `etc/tuigreet/config.toml`. It is not an installer and should not be unpacked blindly over `/`, because doing so could overwrite an existing login-manager configuration.
+Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each archive is a staged root filesystem containing `usr/bin/tuigreet`, the man page, project documentation, license and copyright notices, tmpfiles configuration, and `etc/tuigreet/config.toml`. It is not an installer and should not be unpacked blindly over `/`, because doing so could overwrite an existing login-manager configuration.
 
 Verify the adjacent SHA-256 file and the GitHub provenance attestation before installation. The included `usr/share/doc/tuigreety/INSTALL.md` gives exact commands and preserves an existing `/etc/tuigreet/config.toml`; the same instructions are available in [`contrib/release/INSTALL.md`](contrib/release/INSTALL.md). The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
@@ -301,3 +301,9 @@ Please note that we can only render colors as supported by the running terminal.
 Below is a screenshot of the greeter with the following theme applied: `border=magenta;text=cyan;prompt=green;time=red;action=blue;button=yellow;container=black;input=red`:
 
 ![Screenshot of tuigreet](contrib/screenshot-themed.png)
+
+## License and copyright
+
+Tuigreety is an independently maintained modified version of [tuigreet](https://github.com/apognu/tuigreet). Copyright in the original work remains with Antoine POPINEAU and other respective contributors; copyright in the Tuigreety modifications remains with Tobiichi-Origuchi and their respective contributors.
+
+The complete project is free software under the [GNU General Public License, version 3 or later](LICENSE). The GPL text is kept unmodified; project-specific attribution and the required modification notice are recorded separately in [COPYRIGHT](COPYRIGHT), Git history, and the changelog.

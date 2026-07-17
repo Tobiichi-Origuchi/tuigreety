@@ -40,5 +40,9 @@ package() {
   else
     install -Dm644 share/licenses/tuigreet/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   fi
+  if [[ -f ${release_prefix}share/licenses/tuigreety/COPYRIGHT ]]; then
+    install -Dm644 "${release_prefix}share/licenses/tuigreety/COPYRIGHT" \
+      "$pkgdir/usr/share/licenses/$pkgname/COPYRIGHT"
+  fi
   install -Dm644 "$srcdir/tuigreet.conf" "$pkgdir/usr/lib/tmpfiles.d/tuigreet.conf"
 }

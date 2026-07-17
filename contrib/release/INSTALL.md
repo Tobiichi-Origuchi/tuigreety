@@ -23,6 +23,8 @@ sudo install -Dm755 usr/bin/tuigreet /usr/bin/tuigreet
 sudo install -Dm644 usr/share/man/man1/tuigreet.1 /usr/share/man/man1/tuigreet.1
 sudo install -Dm644 usr/share/licenses/tuigreety/LICENSE \
   /usr/share/licenses/tuigreety/LICENSE
+sudo install -Dm644 usr/share/licenses/tuigreety/COPYRIGHT \
+  /usr/share/licenses/tuigreety/COPYRIGHT
 sudo install -Dm644 usr/share/doc/tuigreety/README.md \
   /usr/share/doc/tuigreety/README.md
 sudo install -Dm644 usr/share/doc/tuigreety/INSTALL.md \

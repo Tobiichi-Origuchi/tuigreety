@@ -1411,19 +1411,29 @@ fn warn_positional(argument: &str, warnings: &mut Vec<String>) {
 }
 
 fn print_version() {
-  println!("tuigreet {} ({})", env!("VERSION"), env!("TARGET"));
-  println!("Copyright (C) 2020 Antoine POPINEAU <https://github.com/apognu/tuigreet>.");
-  println!("Licensed under GPLv3+ (GNU GPL version 3 or later).");
-  println!();
-  println!("This is free software, you are welcome to redistribute it under some conditions.");
-  println!("There is NO WARRANTY, to the extent provided by law.");
+  println!("{}", version_information());
+}
+
+fn version_information() -> String {
+  format!(
+    "tuigreet (tuigreety) {}\n\
+     Target: {}\n\
+     Copyright (C) 2026 Tobiichi-Origuchi <https://github.com/Tobiichi-Origuchi/tuigreety>.\n\
+     Copyright (C) 2020 Antoine POPINEAU <https://github.com/apognu/tuigreet>.\n\
+     License GPLv3+: GNU GPL version 3 or later <https://gnu.org/licenses/gpl.html>\n\
+     \n\
+     This is free software: you are free to change and redistribute it.\n\
+     There is NO WARRANTY, to the extent permitted by law.",
+    env!("VERSION"),
+    env!("TARGET")
+  )
 }
 
 #[cfg(test)]
 mod test {
   use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
-  use super::{mock_sessions, parse_options_ignoring_invalid, print_information};
+  use super::{mock_sessions, parse_options_ignoring_invalid, print_information, version_information};
   use crate::{
     Greeter,
     Mode,
@@ -1508,6 +1518,16 @@ mod test {
     assert!(print_information(&["--help"]));
     assert!(print_information(&["-v"]));
     assert!(!print_information(&["--time"]));
+  }
+
+  #[test]
+  fn version_identifies_the_derivative_and_both_copyright_holders() {
+    let information = version_information();
+
+    assert!(information.starts_with(&format!("tuigreet (tuigreety) {}\n", env!("VERSION"))));
+    assert!(information.contains("Copyright (C) 2026 Tobiichi-Origuchi"));
+    assert!(information.contains("Copyright (C) 2020 Antoine POPINEAU"));
+    assert!(information.contains("License GPLv3+: GNU GPL version 3 or later"));
   }
 
   #[test]

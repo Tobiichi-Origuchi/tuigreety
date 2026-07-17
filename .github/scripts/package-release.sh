@@ -32,7 +32,7 @@ if [[ ! $source_date_epoch =~ ^[0-9]+$ ]]; then
   exit 1
 fi
 
-for input in "$binary" "$man_page" contrib/tuigreet.toml packaging/aur/tuigreet.conf LICENSE README.md \
+for input in "$binary" "$man_page" contrib/tuigreet.toml packaging/aur/tuigreet.conf LICENSE COPYRIGHT README.md \
   contrib/release/INSTALL.md; do
   if [[ ! -f $input ]] || [[ -L $input ]]; then
     echo "missing or unsafe package input: $input" >&2
@@ -52,6 +52,7 @@ install -Dm755 "$binary" "$root/usr/bin/tuigreet"
 install -Dm644 contrib/tuigreet.toml "$root/etc/tuigreet/config.toml"
 install -Dm644 packaging/aur/tuigreet.conf "$root/usr/lib/tmpfiles.d/tuigreet.conf"
 install -Dm644 LICENSE "$root/usr/share/licenses/tuigreety/LICENSE"
+install -Dm644 COPYRIGHT "$root/usr/share/licenses/tuigreety/COPYRIGHT"
 install -Dm644 README.md "$root/usr/share/doc/tuigreety/README.md"
 install -Dm644 contrib/release/INSTALL.md "$root/usr/share/doc/tuigreety/INSTALL.md"
 install -Dm644 "$man_page" "$root/usr/share/man/man1/tuigreet.1"
