@@ -1,15 +1,18 @@
 use std::{
+  collections::HashSet,
   env,
   error::Error,
+  ffi::{OsStr, OsString},
   fs::{self, File},
   io::{self, BufRead, BufReader},
+  os::unix::fs::PermissionsExt,
   path::{Path, PathBuf},
   process::Command,
   sync::LazyLock,
 };
 
 use chrono::Local;
-use ini::Ini;
+use freedesktop_desktop_entry::{DesktopEntry, Line, parse_line};
 use nix::sys::utsname;
 use utmp_rs::{UtmpEntry, UtmpParser};
 use uzers::os::unix::UserExt;
@@ -274,22 +277,55 @@ pub fn get_sessions(greeter: &Greeter) -> Result<Vec<Session>, Box<dyn Error>> {
     &greeter.session_paths
   };
 
-  let mut files = vec![];
+  let mut files = Vec::new();
+  let mut seen = HashSet::<(SessionType, OsString)>::new();
 
   for (path, session_type) in paths.iter() {
     tracing::info!("reading {:?} sessions from '{}'", session_type, path.display());
 
-    if let Ok(entries) = fs::read_dir(path) {
-      files.extend(
-        entries
-          .flat_map(|entry| entry.map(|entry| load_desktop_file(entry.path(), *session_type)))
-          .flatten()
-          .flatten(),
-      );
+    let mut entries = match fs::read_dir(path) {
+      Ok(entries) => entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>(),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+      Err(error) => {
+        tracing::warn!("failed to read session directory '{}': {error}", path.display());
+        continue;
+      },
+    };
+    entries.sort_unstable();
+
+    for path in entries {
+      if path.extension() != Some(OsStr::new("desktop")) || !path.metadata().is_ok_and(|metadata| metadata.is_file()) {
+        continue;
+      }
+
+      let Some(desktop_id) = path.file_name().map(OsStr::to_owned) else {
+        continue;
+      };
+
+      // Session paths are ordered from highest to lowest priority. A hidden,
+      // invalid, or unavailable entry still masks the same desktop ID in a
+      // lower-priority directory, as if the lower file did not exist.
+      if !seen.insert((*session_type, desktop_id)) {
+        continue;
+      }
+
+      match load_desktop_file(&path, *session_type) {
+        Ok(Some(session)) => files.push(session),
+        Ok(None) => {},
+        Err(error) => tracing::warn!("ignoring invalid session '{}': {error}", path.display()),
+      }
     }
   }
 
-  files.sort_by(|a, b| a.name.cmp(&b.name));
+  files.sort_by(|a, b| {
+    a.name
+      .cmp(&b.name)
+      .then_with(|| a.slug.cmp(&b.slug))
+      .then_with(|| a.path.cmp(&b.path))
+  });
 
   tracing::info!("found {} sessions", files.len());
 
@@ -300,35 +336,128 @@ fn load_desktop_file<P>(path: P, session_type: SessionType) -> Result<Option<Ses
 where
   P: AsRef<Path>,
 {
-  let desktop = Ini::load_from_file(path.as_ref())?;
-  let section = desktop
-    .section(Some("Desktop Entry"))
-    .ok_or("no Desktop Entry section in desktop file")?;
+  let path = path.as_ref();
+  let source = fs::read_to_string(path)?;
+  validate_desktop_structure(&source)?;
+  let desktop = DesktopEntry::from_str(path, &source, Option::<&[&str]>::None)?;
 
-  if let Some("true") = section.get("Hidden") {
-    tracing::info!("ignoring session in '{}': Hidden=true", path.as_ref().display());
-    return Ok(None);
+  if desktop.groups.desktop_entry().is_none() {
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "missing Desktop Entry group").into());
   }
-  if let Some("true") = section.get("NoDisplay") {
-    tracing::info!("ignoring session in '{}': NoDisplay=true", path.as_ref().display());
-    return Ok(None);
+  if desktop.type_() != Some("Application") {
+    return Err(io::Error::new(io::ErrorKind::InvalidData, "Type must be Application").into());
   }
 
-  let slug = path.as_ref().file_stem().map(|slug| slug.to_string_lossy().to_string());
-  let name = section.get("Name").ok_or("no Name property in desktop file")?;
-  let exec = section.get("Exec").ok_or("no Exec property in desktop file")?;
-  let xdg_desktop_names = section.get("DesktopNames").map(str::to_string);
+  if desktop_bool(&desktop, "Hidden")? {
+    tracing::info!("ignoring session in '{}': Hidden=true", path.display());
+    return Ok(None);
+  }
+  if desktop_bool(&desktop, "NoDisplay")? {
+    tracing::info!("ignoring session in '{}': NoDisplay=true", path.display());
+    return Ok(None);
+  }
 
-  tracing::info!("got session '{}' in '{}'", name, path.as_ref().display());
+  if let Some(command) = desktop.try_exec()
+    && !try_exec_exists(command)
+  {
+    tracing::info!(
+      "ignoring session in '{}': TryExec={command:?} is not executable",
+      path.display()
+    );
+    return Ok(None);
+  }
+
+  let name = desktop
+    .name::<&str>(&[])
+    .filter(|name| !name.is_empty())
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing or empty Name key"))?;
+  let exec = desktop
+    .exec()
+    .filter(|exec| !exec.trim().is_empty())
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing or empty Exec key"))?;
+  let xdg_desktop_names = desktop.desktop_entry("DesktopNames").map(str::to_string);
+
+  tracing::info!("got session '{}' in '{}'", name, path.display());
 
   Ok(Some(Session {
-    slug,
-    name: name.to_string(),
+    slug: Some(desktop.id().to_string()),
+    name: name.into_owned(),
     command: exec.to_string(),
     session_type,
-    path: Some(path.as_ref().into()),
+    path: Some(path.into()),
     xdg_desktop_names,
   }))
+}
+
+fn validate_desktop_structure(source: &str) -> Result<(), io::Error> {
+  let mut current_group = None::<String>;
+  let mut groups = HashSet::<String>::new();
+  let mut keys = HashSet::<(String, String)>::new();
+
+  for (index, line) in source.lines().enumerate() {
+    match parse_line(line).map_err(|error| {
+      io::Error::new(
+        io::ErrorKind::InvalidData,
+        format!("line {} is not valid Desktop Entry syntax: {error}", index + 1),
+      )
+    })? {
+      Line::Group(group) => {
+        if !groups.insert(group.to_string()) {
+          return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("line {} repeats group [{group}]", index + 1),
+          ));
+        }
+        current_group = Some(group.to_string());
+      },
+      Line::Entry(key, _) => {
+        let group = current_group.as_ref().ok_or_else(|| {
+          io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("line {} defines {key:?} before any group", index + 1),
+          )
+        })?;
+        let key = key.trim();
+        if !keys.insert((group.clone(), key.to_string())) {
+          return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("line {} repeats key {key:?} in group [{group}]", index + 1),
+          ));
+        }
+      },
+      Line::Comment(_) => {},
+    }
+  }
+
+  Ok(())
+}
+
+fn desktop_bool(desktop: &DesktopEntry, key: &str) -> Result<bool, io::Error> {
+  match desktop.desktop_entry(key) {
+    None | Some("false") => Ok(false),
+    Some("true") => Ok(true),
+    Some(value) => Err(io::Error::new(
+      io::ErrorKind::InvalidData,
+      format!("{key} must be true or false, got {value:?}"),
+    )),
+  }
+}
+
+fn try_exec_exists(command: &str) -> bool {
+  let is_executable = |path: &Path| {
+    path
+      .metadata()
+      .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+  };
+  let command = Path::new(command);
+
+  if command.is_absolute() {
+    return is_executable(command);
+  }
+
+  env::var_os("PATH")
+    .map(|paths| env::split_paths(&paths).any(|directory| is_executable(&directory.join(command))))
+    .unwrap_or(false)
 }
 
 pub fn capslock_status() -> bool {
@@ -338,6 +467,138 @@ pub fn capslock_status() -> bool {
   match command.output() {
     Ok(output) => output.status.code() == Some(0),
     Err(_) => false,
+  }
+}
+
+#[cfg(test)]
+mod session_tests {
+  use std::{
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+  };
+
+  use tempfile::tempdir;
+
+  use super::{get_sessions, load_desktop_file};
+  use crate::{Greeter, ui::sessions::SessionType};
+
+  fn write_desktop(directory: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = directory.join(name);
+    fs::write(&path, contents).unwrap();
+    path
+  }
+
+  fn visible_session(name: &str, extra: &str) -> String {
+    format!(
+      "[Desktop Entry]\nType=Application\nName={name}\nExec=/usr/bin/session --flag\nDesktopNames=one;two;\n{extra}"
+    )
+  }
+
+  #[test]
+  fn parses_a_standard_session_entry() {
+    let root = tempdir().unwrap();
+    let executable = root.path().join("session");
+    fs::write(&executable, "").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = write_desktop(
+      root.path(),
+      "example.desktop",
+      &visible_session("My\\sSession", &format!("TryExec={}\n", executable.display())),
+    );
+
+    let session = load_desktop_file(&path, SessionType::Wayland).unwrap().unwrap();
+
+    assert_eq!(session.slug.as_deref(), Some("example"));
+    assert_eq!(session.name, "My Session");
+    assert_eq!(session.command, "/usr/bin/session --flag");
+    assert_eq!(session.session_type, SessionType::Wayland);
+    assert_eq!(session.path.as_deref(), Some(path.as_path()));
+    assert_eq!(session.xdg_desktop_names.as_deref(), Some("one;two;"));
+  }
+
+  #[test]
+  fn rejects_non_application_and_invalid_boolean_entries() {
+    let root = tempdir().unwrap();
+    let link = write_desktop(
+      root.path(),
+      "link.desktop",
+      "[Desktop Entry]\nType=Link\nName=Link\nExec=link\n",
+    );
+    let invalid_bool = write_desktop(
+      root.path(),
+      "invalid.desktop",
+      &visible_session("Invalid", "Hidden=yes\n"),
+    );
+
+    assert!(load_desktop_file(link, SessionType::Wayland).is_err());
+    assert!(load_desktop_file(invalid_bool, SessionType::Wayland).is_err());
+  }
+
+  #[test]
+  fn rejects_duplicate_groups_and_keys() {
+    let root = tempdir().unwrap();
+    let duplicate_key = write_desktop(
+      root.path(),
+      "key.desktop",
+      "[Desktop Entry]\nType=Application\nName=One\nName=Two\nExec=session\n",
+    );
+    let duplicate_group = write_desktop(
+      root.path(),
+      "group.desktop",
+      "[Desktop Entry]\nType=Application\nName=One\nExec=session\n[Desktop Entry]\nName=Two\n",
+    );
+
+    assert!(load_desktop_file(duplicate_key, SessionType::Wayland).is_err());
+    assert!(load_desktop_file(duplicate_group, SessionType::Wayland).is_err());
+  }
+
+  #[test]
+  fn hidden_and_unavailable_sessions_are_ignored() {
+    let root = tempdir().unwrap();
+    let hidden = write_desktop(
+      root.path(),
+      "hidden.desktop",
+      &visible_session("Hidden", "Hidden=true\n"),
+    );
+    let missing = write_desktop(
+      root.path(),
+      "missing.desktop",
+      &visible_session("Missing", "TryExec=/definitely/missing/tuigreety-session\n"),
+    );
+
+    assert!(load_desktop_file(hidden, SessionType::Wayland).unwrap().is_none());
+    assert!(load_desktop_file(missing, SessionType::Wayland).unwrap().is_none());
+  }
+
+  #[test]
+  fn higher_priority_entries_mask_the_same_desktop_id() {
+    let high = tempdir().unwrap();
+    let low = tempdir().unwrap();
+    write_desktop(
+      high.path(),
+      "same.desktop",
+      &visible_session("Hidden override", "Hidden=true\n"),
+    );
+    write_desktop(low.path(), "same.desktop", &visible_session("Must stay hidden", ""));
+    write_desktop(low.path(), "z.desktop", &visible_session("Same name", ""));
+    write_desktop(low.path(), "a.desktop", &visible_session("Same name", ""));
+    write_desktop(low.path(), "not-a-session.ini", &visible_session("Ignored", ""));
+    fs::create_dir(low.path().join("directory.desktop")).unwrap();
+
+    let mut greeter = Greeter::default();
+    greeter.session_paths = vec![
+      (high.path().into(), SessionType::Wayland),
+      (low.path().into(), SessionType::Wayland),
+    ];
+
+    let sessions = get_sessions(&greeter).unwrap();
+    let slugs = sessions
+      .iter()
+      .map(|session| session.slug.as_deref().unwrap())
+      .collect::<Vec<_>>();
+
+    assert_eq!(slugs, ["a", "z"]);
   }
 }
 

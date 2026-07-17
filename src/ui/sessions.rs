@@ -65,7 +65,7 @@ impl SessionSource {
 }
 
 // Represents the XDG type of the selected session.
-#[derive(Default, Debug, Copy, Clone, PartialEq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum SessionType {
   X11,
   Wayland,
