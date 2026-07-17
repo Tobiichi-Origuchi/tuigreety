@@ -147,13 +147,16 @@ Verify the adjacent SHA-256 file and the GitHub provenance attestation before in
 
 Tests from the default features should run without any special consideration by running `cargo test`.
 
-All builds, lints, and tests use the stable toolchain declared in `rust-toolchain.toml`. Code formatting alone uses `nightly-2026-07-15`, because `.rustfmt.toml` enables unstable formatting rules:
+All builds, lints, and tests use the stable toolchain declared in `rust-toolchain.toml`. Code formatting alone uses the exact dated nightly declared in `RUSTFMT_VERSION`, because `.rustfmt.toml` enables unstable formatting rules:
 
 ```sh
-rustup toolchain install nightly-2026-07-15 --profile minimal --component rustfmt
-cargo +nightly-2026-07-15 fmt --all --check
+RUSTFMT_TOOLCHAIN=$(cat RUSTFMT_VERSION)
+rustup toolchain install "$RUSTFMT_TOOLCHAIN" --profile minimal --component rustfmt
+cargo +"$RUSTFMT_TOOLCHAIN" fmt --all --check
 taplo fmt --check Cargo.toml .taplo.toml Cross.toml rust-toolchain.toml
 ```
+
+The formatter pin is updated deliberately rather than following the moving `nightly` channel. When updating it, choose the newest dated nightly whose rustfmt component is [available](https://rust-lang.github.io/rustup/concepts/components.html#component-availability), format the whole tree, review any formatting changes, and commit the new pin together with those changes.
 
 If you intend to run the whole test suite, you will need to perform some setup. One of our features uses NSS to list and filter existing users on the system, and in order not to rely on actual users being created on the host, we use [libnss_wrapper](https://cwrap.org/nss_wrapper.html) to mock responses from NSS. Without this, the tests would use the real user list from your system and probably fail because it cannot find the one it looks for.
 
