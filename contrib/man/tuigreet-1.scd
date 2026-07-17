@@ -97,9 +97,10 @@ tuigreet - A graphical console greeter for greetd
 	Allow selecting a user from a graphical menu.
 
 *--user-autocomplete*
-	Allow Tab completion from the eligible local users. Unique matches are
-	completed; ambiguous matches expand only their common prefix. Disabled by
-	default.
+	Allow Tab completion from the eligible local users. An empty field completes
+	only when exactly one eligible user exists. Otherwise, after at least one
+	character, unique matches are completed and ambiguous matches expand only
+	their common prefix. Disabled by default.
 
 *--user-menu-min-uid*
 	Minimum UID exposed by the user menu or username completion.

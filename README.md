@@ -265,7 +265,7 @@ Optionally, a user can be selected from a menu instead of typing out their name,
  * **Or**, the available values for `UID_MIN` or `UID_MAX` from `/etc/login.defs`;
  * **Or**, hardcoded `1000` for minimum UID and `60000` for maximum UID.
 
-`--user-autocomplete` uses the same filtered user set without displaying a list. In the username field, Tab completes a unique match. If several users match, it expands only their shared prefix; if the prefix is already a complete username, Tab submits it as before. User discovery is disabled by default so administrators who treat local usernames as sensitive do not expose them accidentally.
+`--user-autocomplete` uses the same filtered user set without displaying a list. On an empty field, Tab completes only when exactly one eligible user exists. After at least one character is entered, Tab completes a unique match or expands a shared prefix; if the prefix is already a complete username, Tab submits it as before. User discovery is disabled by default so administrators who treat local usernames as sensitive do not expose them accidentally.
 
 ### Theming
 

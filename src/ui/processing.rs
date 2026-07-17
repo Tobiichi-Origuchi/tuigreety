@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
   text::Span,
@@ -11,7 +9,7 @@ use crate::{
   ui::{Frame, util::*},
 };
 
-pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
+pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
   let size = f.area();
 
   let width = greeter.width();
@@ -42,5 +40,5 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
   f.render_widget(paragraph, chunks[0]);
   f.render_widget(block, container);
 
-  Ok((1, 1))
+  (1, 1)
 }

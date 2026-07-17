@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use ratatui::{
   layout::{Constraint, Direction, Layout, Rect},
   text::Span,
@@ -12,7 +10,7 @@ use crate::{
   ui::{Frame, prompt_value, util::*},
 };
 
-pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
+pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
   let theme = &greeter.theme;
 
   let size = f.area();
@@ -67,8 +65,8 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
   let new_command = greeter.buffer.clone();
   let offset = get_cursor_offset(greeter, new_command.chars().count());
 
-  Ok((
+  (
     2 + cursor.x + text!(greeter, new_command).chars().count() as u16 + offset as u16,
     cursor.y + 1,
-  ))
+  )
 }

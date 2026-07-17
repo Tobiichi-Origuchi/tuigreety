@@ -1,6 +1,6 @@
 use std::{error::Error, sync::Arc};
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use greetd_ipc::Request;
 use tokio::sync::RwLock;
 
@@ -29,6 +29,13 @@ pub async fn handle(
   input: KeyEvent,
   ipc: Ipc,
 ) -> Result<Option<Control>, Box<dyn Error>> {
+  // Some terminals report a second event when a key is released. Acting on
+  // both events would duplicate text input and actions. Repeats, however, are
+  // intentional and should behave like presses.
+  if input.kind == KeyEventKind::Release {
+    return Ok(None);
+  }
+
   let mut greeter = greeter.write().await;
 
   if greeter.working {
@@ -38,10 +45,10 @@ pub async fn handle(
   match input {
     // ^U should erase the current buffer.
     KeyEvent {
-      code: KeyCode::Char('u'),
-      modifiers: KeyModifiers::CONTROL,
+      code: KeyCode::Char(c),
+      modifiers,
       ..
-    } => match greeter.mode {
+    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'u') => match greeter.mode {
       Mode::Username => greeter.username = MaskedString::default(),
       Mode::Password => greeter.buffer = String::new(),
       Mode::Command => greeter.buffer = String::new(),
@@ -51,10 +58,10 @@ pub async fn handle(
     // In debug mode only, ^X will exit the application.
     #[cfg(debug_assertions)]
     KeyEvent {
-      code: KeyCode::Char('x'),
-      modifiers: KeyModifiers::CONTROL,
+      code: KeyCode::Char(c),
+      modifiers,
       ..
-    } => {
+    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'x') => {
       return Ok(Some(Control::Exit(crate::AuthStatus::Cancel)));
     },
 
@@ -182,10 +189,10 @@ pub async fn handle(
 
     // ^A should go to the start of the current prompt
     KeyEvent {
-      code: KeyCode::Char('a'),
-      modifiers: KeyModifiers::CONTROL,
+      code: KeyCode::Char(c),
+      modifiers,
       ..
-    } => {
+    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'a') => {
       let value = {
         match greeter.mode {
           Mode::Username => &greeter.username.value,
@@ -198,10 +205,10 @@ pub async fn handle(
 
     // ^A should go to the end of the current prompt
     KeyEvent {
-      code: KeyCode::Char('e'),
-      modifiers: KeyModifiers::CONTROL,
+      code: KeyCode::Char(c),
+      modifiers,
       ..
-    } => greeter.cursor_offset = 0,
+    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'e') => greeter.cursor_offset = 0,
 
     // With completion enabled, Tab completes a unique username or expands a
     // shared prefix. A second Tab on a complete username submits it, retaining
@@ -299,10 +306,7 @@ pub async fn handle(
     },
 
     // Do not handle any other controls keybindings
-    KeyEvent {
-      modifiers: KeyModifiers::CONTROL,
-      ..
-    } => {},
+    KeyEvent { modifiers, .. } if modifiers.contains(KeyModifiers::CONTROL) => {},
 
     // Handle free-form entry of characters.
     KeyEvent {
@@ -343,6 +347,13 @@ fn complete_username(greeter: &mut Greeter) -> Completion {
 
   if matches.contains(&input) {
     return Completion::Exact;
+  }
+
+  // An empty prefix should reveal a username only when there is exactly one
+  // eligible account. With multiple accounts, require the user to type a
+  // distinguishing prefix first.
+  if input.is_empty() && matches.len() != 1 {
+    return Completion::None;
   }
 
   let Some(completion) = common_prefix(&matches) else {
@@ -481,7 +492,7 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
 mod test {
   use std::sync::Arc;
 
-  use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+  use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
   use tokio::{sync::RwLock, time::Duration};
 
   use super::{Completion, common_prefix, complete_username, handle};
@@ -540,6 +551,74 @@ mod test {
     assert_eq!(complete_username(&mut greeter), Completion::Changed);
     assert_eq!(greeter.username.value, "origuchi");
     assert!(greeter.username.mask.is_none());
+  }
+
+  #[test]
+  fn empty_prefix_does_not_reveal_a_shared_prefix() {
+    let mut greeter = Greeter::default();
+    greeter.users.options = vec![
+      User {
+        username: "alice".into(),
+        name: None,
+      },
+      User {
+        username: "adam".into(),
+        name: None,
+      },
+    ];
+
+    assert_eq!(complete_username(&mut greeter), Completion::None);
+    assert!(greeter.username.value.is_empty());
+  }
+
+  #[tokio::test]
+  async fn release_events_are_ignored_and_repeat_events_are_handled() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::empty(), KeyEventKind::Release),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    assert!(greeter.read().await.username.value.is_empty());
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new_with_kind(KeyCode::Char('a'), KeyModifiers::empty(), KeyEventKind::Repeat),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(greeter.read().await.username.value, "a");
+  }
+
+  #[tokio::test]
+  async fn control_bindings_accept_additional_modifiers() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.username.value = "username".into();
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('U'), KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    assert!(greeter.read().await.username.value.is_empty());
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL | KeyModifiers::ALT),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    assert!(greeter.read().await.username.value.is_empty());
   }
 
   #[test]

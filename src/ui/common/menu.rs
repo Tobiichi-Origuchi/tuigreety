@@ -1,4 +1,4 @@
-use std::{borrow::Cow, error::Error};
+use std::borrow::Cow;
 
 use ratatui::{
   prelude::Rect,
@@ -34,7 +34,7 @@ impl<T> Menu<T>
 where
   T: MenuItem,
 {
-  pub fn draw(&self, greeter: &Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
+  pub fn draw(&self, greeter: &Greeter, f: &mut Frame) -> (u16, u16) {
     let theme = &greeter.theme;
 
     let size = f.area();
@@ -64,7 +64,7 @@ where
 
     f.render_widget(block, container);
 
-    Ok((1, 1))
+    (1, 1)
   }
 
   fn get_option<'g, S>(&self, name: S, index: usize) -> Span<'g>

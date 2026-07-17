@@ -7,12 +7,7 @@ pub mod sessions;
 pub mod users;
 mod util;
 
-use std::{
-  borrow::Cow,
-  error::Error,
-  io::{self, Write},
-  sync::Arc,
-};
+use std::{borrow::Cow, error::Error, sync::Arc};
 
 use chrono::prelude::*;
 use ratatui::{
@@ -140,19 +135,17 @@ where
       f.render_widget(status_right, status_chunks[STATUSBAR_RIGHT_INDEX]);
     }
 
-    let cursor = match greeter.mode {
-      Mode::Command => self::command::draw(&mut greeter, f).ok(),
-      Mode::Sessions => greeter.sessions.draw(&greeter, f).ok(),
-      Mode::Power => greeter.powers.draw(&greeter, f).ok(),
-      Mode::Users => greeter.users.draw(&greeter, f).ok(),
-      Mode::Processing => self::processing::draw(&mut greeter, f).ok(),
-      _ => self::prompt::draw(&mut greeter, f).ok(),
-    };
+    let cursor = Some(match greeter.mode {
+      Mode::Command => self::command::draw(&mut greeter, f),
+      Mode::Sessions => greeter.sessions.draw(&greeter, f),
+      Mode::Power => greeter.powers.draw(&greeter, f),
+      Mode::Users => greeter.users.draw(&greeter, f),
+      Mode::Processing => self::processing::draw(&mut greeter, f),
+      _ => self::prompt::draw(&mut greeter, f),
+    });
 
     draw_cursor(f.buffer_mut(), cursor, cursor_on && !hide_cursor);
   })?;
-
-  io::stdout().flush()?;
 
   Ok(())
 }

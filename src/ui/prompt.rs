@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::sync::LazyLock;
 
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -20,11 +20,13 @@ const GREETING_INDEX: usize = 0;
 const USERNAME_INDEX: usize = 1;
 const ANSWER_INDEX: usize = 3;
 
+static HOSTNAME: LazyLock<String> = LazyLock::new(get_hostname);
+
 fn mask_secret(pool: &str, length: usize) -> String {
   pool.chars().cycle().take(length).collect()
 }
 
-pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn Error>> {
+pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
   let theme = &greeter.theme;
 
   let size = f.area();
@@ -46,7 +48,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
     height - (2 * container_padding),
   );
 
-  let hostname = Span::from(titleize(&greeter.text.authenticate_title(&get_hostname())));
+  let hostname = Span::from(titleize(&greeter.text.authenticate_title(&HOSTNAME)));
   let block = Block::default()
     .title(hostname)
     .title_style(theme.of(&[Themed::Title]))
@@ -159,10 +161,10 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
       let username_length = greeter.username.get().chars().count();
       let offset = get_cursor_offset(greeter, username_length);
 
-      Ok((
+      (
         2 + cursor.x + text!(greeter, username).chars().count() as u16 + offset as u16,
         USERNAME_INDEX as u16 + cursor.y,
-      ))
+      )
     },
 
     Mode::Password => {
@@ -170,19 +172,19 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> Result<(u16, u16), Box<dyn 
       let offset = get_cursor_offset(greeter, answer_length);
 
       if greeter.asking_for_secret && !greeter.secret_display.show() {
-        Ok((
+        (
           1 + cursor.x + greeter.prompt_width() as u16,
           ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1,
-        ))
+        )
       } else {
-        Ok((
+        (
           1 + cursor.x + greeter.prompt_width() as u16 + offset as u16,
           ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1,
-        ))
+        )
       }
     },
 
-    _ => Ok((1, 1)),
+    _ => (1, 1),
   }
 }
 
