@@ -305,25 +305,12 @@ impl Ipc {
               let (command, env) = wrap_session_command(greeter, session, &default);
               greeter.pending_session = Some(PendingSession::capture(greeter));
 
-              #[cfg(not(debug_assertions))]
               self
                 .send(Request::StartSession {
                   cmd: vec![command.to_string()],
                   env,
                 })
                 .await;
-
-              #[cfg(debug_assertions)]
-              {
-                let _ = command;
-
-                self
-                  .send(Request::StartSession {
-                    cmd: vec!["true".to_string()],
-                    env,
-                  })
-                  .await;
-              }
             },
           }
         }
@@ -620,6 +607,24 @@ mod test {
     );
     assert_eq!(committed[0].1, (false, false, true, false));
     assert!(greeter.pending_session.is_none());
+  }
+
+  #[tokio::test]
+  async fn session_start_uses_the_selected_command_in_debug_builds() {
+    let mut greeter = Greeter::default();
+    greeter.mock = true;
+    greeter.session_source = SessionSource::DefaultCommand("actual-session --flag".into(), None);
+    let mut ipc = Ipc::new();
+
+    ipc
+      .parse_response_with(&mut greeter, Response::Success, |_, _| unreachable!())
+      .await
+      .unwrap();
+
+    assert!(matches!(
+      ipc.next().await,
+      Some(Request::StartSession { cmd, .. }) if cmd == ["actual-session --flag"]
+    ));
   }
 
   #[tokio::test]
