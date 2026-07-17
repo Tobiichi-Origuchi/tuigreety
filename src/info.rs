@@ -19,6 +19,7 @@ use uzers::os::unix::UserExt;
 
 use crate::{
   Greeter,
+  desktop_entry::{parse_exec, shell_join},
   ui::{
     common::masked::MaskedString,
     sessions::{Session, SessionType},
@@ -373,8 +374,8 @@ where
     .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing or empty Name key"))?;
   let exec = desktop
     .exec()
-    .filter(|exec| !exec.trim().is_empty())
-    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing or empty Exec key"))?;
+    .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "missing Exec key"))?;
+  let command = shell_join(&parse_exec(exec, &name, desktop.icon(), path)?);
   let xdg_desktop_names = desktop.desktop_entry("DesktopNames").map(str::to_string);
 
   tracing::info!("got session '{}' in '{}'", name, path.display());
@@ -382,7 +383,7 @@ where
   Ok(Some(Session {
     slug: Some(desktop.id().to_string()),
     name: name.into_owned(),
-    command: exec.to_string(),
+    command,
     session_type,
     path: Some(path.into()),
     xdg_desktop_names,
@@ -504,14 +505,23 @@ mod session_tests {
     let path = write_desktop(
       root.path(),
       "example.desktop",
-      &visible_session("My\\sSession", &format!("TryExec={}\n", executable.display())),
+      &format!(
+        "[Desktop Entry]\nType=Application\nName=My\\sSession\nIcon=my-icon\nExec=/usr/bin/session \"two\\swords\" %% %F %i %c %k\nDesktopNames=one;two;\nTryExec={}\n",
+        executable.display()
+      ),
     );
 
     let session = load_desktop_file(&path, SessionType::Wayland).unwrap().unwrap();
 
     assert_eq!(session.slug.as_deref(), Some("example"));
     assert_eq!(session.name, "My Session");
-    assert_eq!(session.command, "/usr/bin/session --flag");
+    assert_eq!(
+      session.command,
+      format!(
+        "'/usr/bin/session' 'two words' '%' '--icon' 'my-icon' 'My Session' '{}'",
+        path.display()
+      )
+    );
     assert_eq!(session.session_type, SessionType::Wayland);
     assert_eq!(session.path.as_deref(), Some(path.as_path()));
     assert_eq!(session.xdg_desktop_names.as_deref(), Some("one;two;"));

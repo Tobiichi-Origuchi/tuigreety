@@ -2,6 +2,7 @@
 mod macros;
 
 mod config;
+mod desktop_entry;
 mod event;
 mod greeter;
 mod info;
