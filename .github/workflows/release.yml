@@ -116,16 +116,14 @@ jobs:
         env:
           VERSION: ${{ github.ref_type == 'tag' && github.ref_name || 'tip' }}
         run: |
-          package="tuigreety-${VERSION}-${{ matrix.name }}"
-          install -Dm755 "target/repro-a/${{ matrix.target }}/release/tuigreet" "dist/${package}/bin/tuigreet"
-          install -Dm644 contrib/tuigreet.toml "dist/${package}/etc/tuigreet/config.toml"
-          install -Dm644 LICENSE "dist/${package}/share/licenses/tuigreet/LICENSE"
-          install -Dm644 README.md "dist/${package}/share/doc/tuigreet/README.md"
-          install -Dm644 dist/metadata/tuigreet.1 "dist/${package}/share/man/man1/tuigreet.1"
           source_date_epoch=$(git show --no-patch --format=%ct HEAD)
-          tar --create --sort=name --owner=0 --group=0 --numeric-owner --mtime="@${source_date_epoch}" --directory dist "$package" | gzip --no-name > "dist/${package}.tar.gz"
-          cd dist
-          sha256sum "${package}.tar.gz" > "${package}.tar.gz.sha256"
+          bash .github/scripts/package-release.sh \
+            "$VERSION" \
+            "${{ matrix.name }}" \
+            "target/repro-a/${{ matrix.target }}/release/tuigreet" \
+            dist/metadata/tuigreet.1 \
+            dist \
+            "$source_date_epoch"
       - name: Upload package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

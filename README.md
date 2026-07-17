@@ -139,7 +139,9 @@ All three install `/usr/bin/tuigreet` and `/etc/tuigreet/config.toml`, provide `
 
 ### Pre-built binaries
 
-Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each package includes the binary, man page, license, README, and a ready-to-install `/etc/tuigreet/config.toml`. The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
+Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each archive is a staged root filesystem containing `usr/bin/tuigreet`, the man page, project documentation, license, tmpfiles configuration, and `etc/tuigreet/config.toml`. It is not an installer and should not be unpacked blindly over `/`, because doing so could overwrite an existing login-manager configuration.
+
+Verify the adjacent SHA-256 file and the GitHub provenance attestation before installation. The included `usr/share/doc/tuigreety/INSTALL.md` gives exact commands and preserves an existing `/etc/tuigreet/config.toml`; the same instructions are available in [`contrib/release/INSTALL.md`](contrib/release/INSTALL.md). The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
 ## Running the tests
 

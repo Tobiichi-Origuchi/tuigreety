@@ -26,9 +26,19 @@ package() {
   local release_arch="$CARCH"
   [[ $CARCH == armv7h ]] && release_arch=armv7
   cd "tuigreety-$pkgver-$release_arch"
-  install -Dm755 bin/tuigreet "$pkgdir/usr/bin/tuigreet"
-  install -Dm644 share/man/man1/tuigreet.1 "$pkgdir/usr/share/man/man1/tuigreet.1"
+
+  # Releases through 0.10.2 used an ambiguous prefix-style layout. Keep the
+  # fallback while those archives remain useful for local rebuilds.
+  local release_prefix=''
+  [[ -f usr/bin/tuigreet ]] && release_prefix=usr/
+
+  install -Dm755 "${release_prefix}bin/tuigreet" "$pkgdir/usr/bin/tuigreet"
+  install -Dm644 "${release_prefix}share/man/man1/tuigreet.1" "$pkgdir/usr/share/man/man1/tuigreet.1"
   install -Dm644 etc/tuigreet/config.toml "$pkgdir/etc/tuigreet/config.toml"
-  install -Dm644 share/licenses/tuigreet/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  if [[ -f ${release_prefix}share/licenses/tuigreety/LICENSE ]]; then
+    install -Dm644 "${release_prefix}share/licenses/tuigreety/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  else
+    install -Dm644 share/licenses/tuigreet/LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  fi
   install -Dm644 "$srcdir/tuigreet.conf" "$pkgdir/usr/lib/tmpfiles.d/tuigreet.conf"
 }
