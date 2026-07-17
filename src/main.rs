@@ -1,7 +1,4 @@
 #[macro_use]
-extern crate smart_default;
-
-#[macro_use]
 mod macros;
 
 mod config;

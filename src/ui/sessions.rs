@@ -12,7 +12,7 @@ use crate::Greeter;
 // file. Each variant contains a reference to the data required to create a
 // session, either the String of the command or the index of the session in the
 // session list.
-#[derive(SmartDefault)]
+#[derive(Default)]
 pub enum SessionSource {
   #[default]
   None,
@@ -65,7 +65,7 @@ impl SessionSource {
 }
 
 // Represents the XDG type of the selected session.
-#[derive(SmartDefault, Debug, Copy, Clone, PartialEq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub enum SessionType {
   X11,
   Wayland,
@@ -88,7 +88,7 @@ impl SessionType {
 }
 
 // A session, as defined by an XDG session file.
-#[derive(SmartDefault, Clone)]
+#[derive(Default, Clone)]
 pub struct Session {
   // Slug of the session, being the name of the desktop file without its
   // extension.

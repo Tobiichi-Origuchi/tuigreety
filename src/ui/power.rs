@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use crate::{power::PowerOption, ui::common::menu::MenuItem};
 
-#[derive(SmartDefault, Clone)]
+#[derive(Default, Clone)]
 pub struct Power {
   pub action: PowerOption,
   pub label: String,

@@ -184,7 +184,7 @@ impl Error for AuthStatus {}
 
 // A mode represents the large section of the software, usually screens to be
 // displayed, or the state of the application.
-#[derive(SmartDefault, Debug, Copy, Clone, PartialEq)]
+#[derive(Default, Debug, Copy, Clone, PartialEq)]
 pub enum Mode {
   #[default]
   Username,
@@ -198,7 +198,7 @@ pub enum Mode {
 }
 
 // This enum models how secret values should be displayed on terminal.
-#[derive(SmartDefault, Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub enum SecretDisplay {
   #[default]
   // All characters hidden.
@@ -217,7 +217,7 @@ impl SecretDisplay {
 }
 
 // This enum models text alignment options
-#[derive(SmartDefault, Debug, Clone)]
+#[derive(Default, Debug, Clone)]
 pub enum GreetAlign {
   #[default]
   Center,
@@ -225,7 +225,6 @@ pub enum GreetAlign {
   Right,
 }
 
-#[derive(SmartDefault)]
 pub struct Greeter {
   pub debug: bool,
   pub logfile: String,
@@ -292,7 +291,6 @@ pub struct Greeter {
   pub time: bool,
   // Time format
   pub time_format: Option<String>,
-  #[default(DEFAULT_REFRESH_RATE)]
   pub refresh_rate: u16,
   // Greeting message (MOTD) to use to welcome the user.
   pub greeting: Option<String>,
@@ -307,11 +305,8 @@ pub struct Greeter {
   // Run without greetd and simulate authentication for visual testing.
   pub mock: bool,
 
-  #[default(2)]
   pub kb_command: u8,
-  #[default(3)]
   pub kb_sessions: u8,
-  #[default(12)]
   pub kb_power: u8,
 
   // The software is waiting for a response from `greetd`.
@@ -322,6 +317,58 @@ pub struct Greeter {
   pub(crate) pending_session: Option<PendingSession>,
   // Should we exit?
   pub exit: Option<AuthStatus>,
+}
+
+impl Default for Greeter {
+  fn default() -> Self {
+    Self {
+      debug: false,
+      logfile: String::new(),
+      logger: None,
+      text: Text::default(),
+      config: None,
+      settings: Settings::default(),
+      socket: String::new(),
+      stream: None,
+      mode: Mode::default(),
+      previous_mode: Mode::default(),
+      cursor_offset: 0,
+      previous_buffer: None,
+      buffer: String::new(),
+      session_source: SessionSource::default(),
+      allow_command_editor: false,
+      session_paths: Vec::new(),
+      sessions: Menu::default(),
+      session_wrapper: None,
+      xsession_wrapper: None,
+      user_menu: false,
+      user_autocomplete: false,
+      users: Menu::default(),
+      username: MaskedString::default(),
+      prompt: None,
+      asking_for_secret: false,
+      secret_display: SecretDisplay::default(),
+      remember: false,
+      remember_session: false,
+      remember_user_session: false,
+      theme: Theme::default(),
+      time: false,
+      time_format: None,
+      refresh_rate: DEFAULT_REFRESH_RATE,
+      greeting: None,
+      message: None,
+      powers: Menu::default(),
+      power_setsid: false,
+      mock: false,
+      kb_command: 2,
+      kb_sessions: 3,
+      kb_power: 12,
+      working: false,
+      done: false,
+      pending_session: None,
+      exit: None,
+    }
+  }
 }
 
 impl Drop for Greeter {

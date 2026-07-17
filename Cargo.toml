@@ -31,7 +31,6 @@ ratatui = { version = "0.30.2", default-features = false, features = [
   "unstable-rendered-line-info",
 ] }
 rust-ini = "0.21.3"
-smart-default = "0.7.1"
 tokio = { version = "1.52.3", default-features = false, features = [
   "macros",
   "rt-multi-thread",
