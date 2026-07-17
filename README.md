@@ -145,7 +145,7 @@ Verify the adjacent SHA-256 file and the GitHub provenance attestation before in
 
 ## Running the tests
 
-Tests from the default features should run without any special consideration by running `cargo test`.
+The complete test suite runs without host-specific setup by running `cargo test`.
 
 All builds, lints, and tests use the stable toolchain declared in `rust-toolchain.toml`. Code formatting alone uses the exact dated nightly declared in `RUSTFMT_VERSION`, because `.rustfmt.toml` enables unstable formatting rules:
 
@@ -157,17 +157,6 @@ taplo fmt --check Cargo.toml .taplo.toml Cross.toml rust-toolchain.toml
 ```
 
 The formatter pin is updated deliberately rather than following the moving `nightly` channel. When updating it, choose the newest dated nightly whose rustfmt component is [available](https://rust-lang.github.io/rustup/concepts/components.html#component-availability), format the whole tree, review any formatting changes, and commit the new pin together with those changes.
-
-If you intend to run the whole test suite, you will need to perform some setup. One of our features uses NSS to list and filter existing users on the system, and in order not to rely on actual users being created on the host, we use [libnss_wrapper](https://cwrap.org/nss_wrapper.html) to mock responses from NSS. Without this, the tests would use the real user list from your system and probably fail because it cannot find the one it looks for.
-
-After installing `libnss_wrapper` on your system (or compiling it to get the `.so`), you can run those specific tests as such:
-
-```
-$ export NSS_WRAPPER_PASSWD=contrib/fixtures/passwd
-$ export NSS_WRAPPER_GROUP=contrib/fixtures/group
-$ LD_PRELOAD=/path/to/libnss_wrapper.so cargo test --features nsswrapper nsswrapper_ # To run those tests specifically
-$ LD_PRELOAD=/path/to/libnss_wrapper.so cargo test --all-features # To run the whole test suite
-```
 
 ## Configuration
 

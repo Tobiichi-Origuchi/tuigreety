@@ -1,4 +1,5 @@
 use std::{
+  borrow::Borrow,
   collections::HashSet,
   env,
   error::Error,
@@ -216,27 +217,42 @@ pub fn delete_last_user_command(username: &str) {
 }
 
 pub fn get_users(min_uid: u32, max_uid: u32) -> Vec<User> {
-  let users = unsafe { uzers::all_users() };
+  // SAFETY: uzers exposes NSS enumeration as unsafe because libc owns global
+  // iteration state. This creates one iterator and consumes it completely
+  // without starting another enumeration in between.
+  users_in_range(unsafe { uzers::all_users() }, min_uid, max_uid)
+}
 
-  let users: Vec<User> = users
-    .filter(|user| user.uid() >= min_uid && user.uid() <= max_uid)
-    .map(|user| User {
-      username: user.name().to_string_lossy().to_string(),
-      name: match user.gecos() {
-        name if name.is_empty() => None,
-        name => {
-          let name = name.to_string_lossy();
-
-          match name.split_once(',') {
-            Some((name, _)) => Some(name.to_string()),
-            None => Some(name.to_string()),
-          }
-        },
-      },
-    })
-    .collect();
-
+fn users_in_range<I, U>(users: I, min_uid: u32, max_uid: u32) -> Vec<User>
+where
+  I: IntoIterator<Item = U>,
+  U: Borrow<uzers::User>,
+{
   users
+    .into_iter()
+    .filter(|user| {
+      let user = user.borrow();
+      user.uid() >= min_uid && user.uid() <= max_uid
+    })
+    .map(|user| {
+      let user = user.borrow();
+
+      User {
+        username: user.name().to_string_lossy().to_string(),
+        name: match user.gecos() {
+          name if name.is_empty() => None,
+          name => {
+            let name = name.to_string_lossy();
+
+            match name.split_once(',') {
+              Some((name, _)) => Some(name.to_string()),
+              None => Some(name.to_string()),
+            }
+          },
+        },
+      }
+    })
+    .collect()
 }
 
 pub fn get_min_max_uids(min_uid: Option<u32>, max_uid: Option<u32>) -> (u32, u32) {
@@ -612,18 +628,28 @@ mod session_tests {
   }
 }
 
-#[cfg(feature = "nsswrapper")]
 #[cfg(test)]
-mod nsswrapper_tests {
-  #[test]
-  fn nsswrapper_get_users_from_nss() {
-    use super::get_users;
+mod user_tests {
+  use uzers::{User, os::unix::UserExt};
 
-    let users = get_users(1000, 2000);
+  use super::users_in_range;
+
+  #[test]
+  fn filters_and_formats_injected_users() {
+    let users = users_in_range(
+      [
+        User::new(0, "root", 0).with_gecos("Root"),
+        User::new(1000, "joe", 1000).with_gecos("Joe Example,Room 1"),
+        User::new(1500, "bob", 1500),
+        User::new(2100, "postgres", 2100),
+      ],
+      1000,
+      2000,
+    );
 
     assert_eq!(users.len(), 2);
     assert_eq!(users[0].username, "joe");
-    assert_eq!(users[0].name, Some("Joe".to_string()));
+    assert_eq!(users[0].name.as_deref(), Some("Joe Example"));
     assert_eq!(users[1].username, "bob");
     assert_eq!(users[1].name, None);
   }

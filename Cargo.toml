@@ -13,16 +13,12 @@ build        = "build.rs"
 name = "tuigreet"
 path = "src/main.rs"
 
-[features]
-default    = [  ]
-nsswrapper = [  ]
-
 [dependencies]
 ansi-to-tui = { version = "8.0.1", default-features = false }
 chrono = { version = "0.4.45", default-features = false, features = [ "clock", "std" ] }
 crossterm = { version = "0.29.0", default-features = false, features = [ "event-stream" ] }
-futures-util = { version = "0.3.32", default-features = false, features = [ "async-await", "std" ] }
 freedesktop-desktop-entry = { version = "0.8.1", default-features = false }
+futures-util = { version = "0.3.32", default-features = false, features = [ "async-await", "std" ] }
 getopts = "0.2.24"
 greetd_ipc = { version = "0.10.3", features = [ "tokio-codec" ] }
 nix = { version = "0.31.3", features = [ "feature" ] }

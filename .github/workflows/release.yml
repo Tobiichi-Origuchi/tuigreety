@@ -37,7 +37,7 @@ jobs:
         with:
           tool: taplo-cli@${{ env.TAPLO_VERSION }}
       - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install --yes libnss-wrapper scdoc
+        run: sudo apt-get update && sudo apt-get install --yes scdoc
       - name: Check toolchain policy
         run: |
           test "$(rustc --version | cut -d ' ' -f 2)" = "$RUST_VERSION"
@@ -50,10 +50,6 @@ jobs:
       - name: Lint
         run: cargo clippy --locked --all-targets --all-features -- -D warnings
       - name: Test
-        env:
-          NSS_WRAPPER_PASSWD: contrib/fixtures/passwd
-          NSS_WRAPPER_GROUP: contrib/fixtures/group
-          LD_PRELOAD: libnss_wrapper.so
         run: cargo test --locked --all-features
       - name: Check release version
         if: github.ref_type == 'tag'
