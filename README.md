@@ -109,6 +109,8 @@ By default, the session command can only come from administrator configuration o
 
 The administrator can restore the legacy `F2` command editor with `--allow-command-editor` or `session.allow-command-editor = true`. This is intentionally disabled by default: anyone who can reach the greeter can use it to choose arbitrary code that will run as the next user who successfully authenticates, without another confirmation after authentication. Enable it only when every person with physical access is trusted. Free-form command caches are ignored while the editor is disabled; the global cache and per-user entries encountered during login are removed.
 
+Text editing follows Unicode grapheme boundaries, and long values scroll horizontally to keep the cursor visible. To bound work and memory before authentication, interactively typed usernames are limited to 256 UTF-8 bytes, PAM responses to 4096 bytes, and free-form commands to 16384 bytes. Rejected input produces an on-screen warning; configured or discovered values are not truncated.
+
 ## Install
 
 ### From source

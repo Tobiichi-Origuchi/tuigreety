@@ -3,6 +3,7 @@ use std::{error::Error, sync::Arc};
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use greetd_ipc::Request;
 use tokio::sync::RwLock;
+use zeroize::Zeroize;
 
 use crate::{
   Greeter,
@@ -13,6 +14,7 @@ use crate::{
   power::power,
   ui::{
     common::masked::MaskedString,
+    input::{self, COMMAND_LIMIT, RESPONSE_LIMIT, USERNAME_LIMIT},
     sessions::{Session, SessionSource},
     users::User,
   },
@@ -73,20 +75,15 @@ pub async fn handle(
       code: KeyCode::Char(c),
       modifiers,
       ..
-    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'u') => match greeter.mode {
-      Mode::Username => greeter.username = MaskedString::default(),
-      Mode::Password => greeter.buffer = String::new(),
-      Mode::Command => greeter.command_buffer = String::new(),
-      _ => {},
-    },
+    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'u') => clear_input(&mut greeter),
 
     // Simple cursor directions in text fields.
     KeyEvent {
       code: KeyCode::Left, ..
-    } => greeter.cursor_offset -= 1,
+    } => move_cursor(&mut greeter, false),
     KeyEvent {
       code: KeyCode::Right, ..
-    } => greeter.cursor_offset += 1,
+    } => move_cursor(&mut greeter, true),
 
     // F2 will display the command entry prompt. If we are already in one of the
     // popup screens, we set the previous screen as being the current previous
@@ -183,15 +180,7 @@ pub async fn handle(
       modifiers,
       ..
     } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'a') => {
-      let value = {
-        match greeter.mode {
-          Mode::Username => &greeter.username.value,
-          Mode::Command => &greeter.command_buffer,
-          _ => &greeter.buffer,
-        }
-      };
-
-      greeter.cursor_offset = -(value.chars().count() as i16);
+      move_cursor_to_edge(&mut greeter, false);
     },
 
     // ^A should go to the end of the current prompt
@@ -199,7 +188,9 @@ pub async fn handle(
       code: KeyCode::Char(c),
       modifiers,
       ..
-    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'e') => greeter.cursor_offset = 0,
+    } if modifiers.contains(KeyModifiers::CONTROL) && c.eq_ignore_ascii_case(&'e') => {
+      move_cursor_to_edge(&mut greeter, true);
+    },
 
     // With completion enabled, Tab completes a unique username or expands a
     // shared prefix. A second Tab on a complete username submits it, retaining
@@ -242,6 +233,8 @@ pub async fn handle(
           .await;
 
         greeter.buffer = String::new();
+        greeter.response_cursor = 0;
+        greeter.input_warning = None;
       },
 
       Mode::Command if greeter.allow_command_editor => {
@@ -260,6 +253,7 @@ pub async fn handle(
 
         if let Some(User { username, name }) = username {
           greeter.username = MaskedString::from(username, name);
+          greeter.username_cursor = greeter.username.value.len();
         }
 
         greeter.mode = greeter.previous_mode;
@@ -298,7 +292,7 @@ pub async fn handle(
     // Handle free-form entry of characters.
     KeyEvent {
       code: KeyCode::Char(c), ..
-    } => insert_key(&mut greeter, c).await,
+    } => insert_key(&mut greeter, c),
 
     // Handle deletion of characters.
     KeyEvent {
@@ -307,7 +301,7 @@ pub async fn handle(
     }
     | KeyEvent {
       code: KeyCode::Delete, ..
-    } => delete_key(&mut greeter, input.code).await,
+    } => delete_key(&mut greeter, input.code),
 
     _ => {},
   }
@@ -353,7 +347,8 @@ fn complete_username(greeter: &mut Greeter) -> Completion {
 
   greeter.username.value = completion;
   greeter.username.mask = None;
-  greeter.cursor_offset = 0;
+  greeter.username_cursor = greeter.username.value.len();
+  greeter.input_warning = None;
   Completion::Changed
 }
 
@@ -374,63 +369,132 @@ fn common_prefix(values: &[&str]) -> Option<String> {
 
 // Handle insertion of characters into the proper buffer, depending on the
 // current mode and the position of the cursor.
-async fn insert_key(greeter: &mut Greeter, c: char) {
-  let value = match greeter.mode {
-    Mode::Username => &greeter.username.value,
-    Mode::Password => &greeter.buffer,
-    Mode::Command => &greeter.command_buffer,
+fn insert_key(greeter: &mut Greeter, character: char) {
+  let result = match greeter.mode {
+    Mode::Username => {
+      let result = insert(
+        &mut greeter.username.value,
+        &mut greeter.username_cursor,
+        character,
+        USERNAME_LIMIT,
+      );
+      if result {
+        greeter.username.mask = None;
+      }
+      result
+    },
+    Mode::Password => insert(
+      &mut greeter.buffer,
+      &mut greeter.response_cursor,
+      character,
+      RESPONSE_LIMIT,
+    ),
+    Mode::Command => insert(
+      &mut greeter.command_buffer,
+      &mut greeter.command_cursor,
+      character,
+      COMMAND_LIMIT,
+    ),
     _ => return,
   };
 
-  let index = (value.chars().count() as i16 + greeter.cursor_offset) as usize;
-  let left = value.chars().take(index);
-  let right = value.chars().skip(index);
-
-  let value = left.chain(vec![c]).chain(right).collect();
-  let mode = greeter.mode;
-
-  match mode {
-    Mode::Username => greeter.username.value = value,
-    Mode::Password => greeter.buffer = value,
-    Mode::Command => greeter.command_buffer = value,
-    _ => {},
-  };
+  greeter.input_warning = (!result).then(|| {
+    let limit = match greeter.mode {
+      Mode::Username => USERNAME_LIMIT,
+      Mode::Password => RESPONSE_LIMIT,
+      Mode::Command => COMMAND_LIMIT,
+      _ => unreachable!(),
+    };
+    format!("Input limit reached (maximum {limit} bytes)")
+  });
 }
 
 // Handle deletion of characters from a prompt into the proper buffer, depending
 // on the current mode, whether Backspace or Delete was pressed and the position
 // of the cursor.
-async fn delete_key(greeter: &mut Greeter, key: KeyCode) {
-  let value = match greeter.mode {
-    Mode::Username => &greeter.username.value,
-    Mode::Password => &greeter.buffer,
-    Mode::Command => &greeter.command_buffer,
+fn delete_key(greeter: &mut Greeter, key: KeyCode) {
+  match greeter.mode {
+    Mode::Username => {
+      delete(&mut greeter.username.value, &mut greeter.username_cursor, key);
+      greeter.username.mask = None;
+    },
+    Mode::Password => delete(&mut greeter.buffer, &mut greeter.response_cursor, key),
+    Mode::Command => delete(&mut greeter.command_buffer, &mut greeter.command_cursor, key),
+    _ => return,
+  }
+  greeter.input_warning = None;
+}
+
+fn insert(value: &mut String, cursor: &mut usize, character: char, limit: usize) -> bool {
+  if value.len().saturating_add(character.len_utf8()) > limit {
+    return false;
+  }
+
+  *cursor = input::clamp_cursor(value, *cursor);
+  value.insert(*cursor, character);
+  *cursor = input::cursor_after_insertion(value, (*cursor).saturating_add(character.len_utf8()));
+  true
+}
+
+fn delete(value: &mut String, cursor: &mut usize, key: KeyCode) {
+  *cursor = input::clamp_cursor(value, *cursor);
+  let range = match key {
+    KeyCode::Backspace => input::previous_cursor(value, *cursor)..*cursor,
+    KeyCode::Delete => *cursor..input::next_cursor(value, *cursor),
     _ => return,
   };
 
-  let index = match key {
-    KeyCode::Backspace => (value.chars().count() as i16 + greeter.cursor_offset - 1) as usize,
-    KeyCode::Delete => (value.chars().count() as i16 + greeter.cursor_offset) as usize,
-    _ => 0,
+  if !range.is_empty() {
+    *cursor = range.start;
+    value.replace_range(range, "");
+  }
+}
+
+fn move_cursor(greeter: &mut Greeter, forward: bool) {
+  let (value, cursor) = match greeter.mode {
+    Mode::Username => (&greeter.username.value, &mut greeter.username_cursor),
+    Mode::Password => (&greeter.buffer, &mut greeter.response_cursor),
+    Mode::Command => (&greeter.command_buffer, &mut greeter.command_cursor),
+    _ => return,
   };
 
-  if value.chars().nth(index).is_some() {
-    let left = value.chars().take(index);
-    let right = value.chars().skip(index + 1);
+  *cursor = if forward {
+    input::next_cursor(value, *cursor)
+  } else {
+    input::previous_cursor(value, *cursor)
+  };
+  greeter.input_warning = None;
+}
 
-    let value = left.chain(right).collect();
+fn move_cursor_to_edge(greeter: &mut Greeter, end: bool) {
+  let (value, cursor) = match greeter.mode {
+    Mode::Username => (&greeter.username.value, &mut greeter.username_cursor),
+    Mode::Password => (&greeter.buffer, &mut greeter.response_cursor),
+    Mode::Command => (&greeter.command_buffer, &mut greeter.command_cursor),
+    _ => return,
+  };
 
-    match greeter.mode {
-      Mode::Username => greeter.username.value = value,
-      Mode::Password => greeter.buffer = value,
-      Mode::Command => greeter.command_buffer = value,
-      _ => return,
-    };
+  *cursor = if end { value.len() } else { 0 };
+  greeter.input_warning = None;
+}
 
-    if let KeyCode::Delete = key {
-      greeter.cursor_offset += 1;
-    }
+fn clear_input(greeter: &mut Greeter) {
+  match greeter.mode {
+    Mode::Username => {
+      greeter.username.zeroize();
+      greeter.username_cursor = 0;
+    },
+    Mode::Password => {
+      greeter.buffer.zeroize();
+      greeter.response_cursor = 0;
+    },
+    Mode::Command => {
+      greeter.command_buffer.zeroize();
+      greeter.command_cursor = 0;
+    },
+    _ => return,
   }
+  greeter.input_warning = None;
 }
 
 // Creates a `greetd` session for the provided username.
@@ -444,6 +508,8 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
     })
     .await;
   greeter.buffer = String::new();
+  greeter.response_cursor = 0;
+  greeter.input_warning = None;
 
   #[cfg(not(test))]
   if !greeter.allow_command_editor {
@@ -484,7 +550,7 @@ mod test {
   #[cfg(debug_assertions)]
   use tokio::time::Duration;
 
-  use super::{Completion, common_prefix, complete_username, handle};
+  use super::{Completion, common_prefix, complete_username, delete, handle, insert};
   #[cfg(debug_assertions)]
   use crate::{
     AuthStatus,
@@ -497,6 +563,7 @@ mod test {
     power::PowerOption,
     ui::{
       common::masked::MaskedString,
+      input::USERNAME_LIMIT,
       power::Power,
       sessions::{Session, SessionSource},
       users::User,
@@ -733,7 +800,7 @@ mod test {
       greeter.mode = Mode::Command;
       greeter.buffer = "password".to_string();
       greeter.command_buffer = "newcommand".to_string();
-      greeter.cursor_offset = 2;
+      greeter.command_cursor = 2;
     }
 
     let result = handle(
@@ -750,7 +817,7 @@ mod test {
       assert_eq!(status.mode, Mode::Username);
       assert_eq!(status.buffer, "password".to_string());
       assert!(status.command_buffer.is_empty());
-      assert_eq!(status.cursor_offset, 0);
+      assert_eq!(status.command_cursor, 0);
     }
 
     for mode in [Mode::Users, Mode::Sessions, Mode::Power] {
@@ -779,6 +846,11 @@ mod test {
   #[tokio::test]
   async fn left_right() {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.username.value = "a界".into();
+      state.username_cursor = state.username.value.len();
+    }
 
     let result = handle(
       greeter.clone(),
@@ -791,7 +863,7 @@ mod test {
       let status = greeter.read().await;
 
       assert!(result.is_ok());
-      assert_eq!(status.cursor_offset, -1);
+      assert_eq!(status.username_cursor, 1);
     }
 
     let _ = handle(
@@ -811,8 +883,89 @@ mod test {
       let status = greeter.read().await;
 
       assert!(result.is_ok());
-      assert_eq!(status.cursor_offset, 1);
+      assert_eq!(status.username_cursor, status.username.value.len());
     }
+  }
+
+  #[test]
+  fn insertion_and_deletion_preserve_grapheme_boundaries() {
+    let mut value = "a界e\u{301}👩‍💻".to_string();
+    let mut cursor = value.len();
+
+    delete(&mut value, &mut cursor, KeyCode::Backspace);
+    assert_eq!(value, "a界e\u{301}");
+    assert_eq!(cursor, value.len());
+
+    delete(&mut value, &mut cursor, KeyCode::Backspace);
+    assert_eq!(value, "a界");
+    assert_eq!(cursor, value.len());
+
+    assert!(insert(&mut value, &mut cursor, '\u{301}', USERNAME_LIMIT));
+    assert_eq!(cursor, value.len());
+    assert_eq!(super::input::previous_cursor(&value, cursor), 1);
+  }
+
+  #[tokio::test]
+  async fn input_limit_is_bounded_and_reported_without_corrupting_text() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.username.value = "a".repeat(USERNAME_LIMIT);
+      state.username_cursor = state.username.value.len();
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Char('界'), KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+
+    {
+      let state = greeter.read().await;
+      assert_eq!(state.username.value.len(), USERNAME_LIMIT);
+      assert_eq!(
+        state.input_warning.as_deref(),
+        Some("Input limit reached (maximum 256 bytes)")
+      );
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+    let state = greeter.read().await;
+    assert_eq!(state.username.value.len(), USERNAME_LIMIT - 1);
+    assert!(state.input_warning.is_none());
+  }
+
+  #[tokio::test]
+  async fn popup_keys_do_not_move_any_text_field_cursor() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.mode = Mode::Sessions;
+      state.username_cursor = 1;
+      state.response_cursor = 2;
+      state.command_cursor = 3;
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Left, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+
+    let state = greeter.read().await;
+    assert_eq!(state.username_cursor, 1);
+    assert_eq!(state.response_cursor, 2);
+    assert_eq!(state.command_cursor, 3);
   }
 
   #[tokio::test]
@@ -1116,7 +1269,7 @@ mod test {
       let status = greeter.read().await;
 
       assert!(result.is_ok());
-      assert_eq!(status.cursor_offset, -9);
+      assert_eq!(status.command_cursor, 0);
     }
 
     let result = handle(
@@ -1130,7 +1283,7 @@ mod test {
       let status = greeter.read().await;
 
       assert!(result.is_ok());
-      assert_eq!(status.cursor_offset, 0);
+      assert_eq!(status.command_cursor, status.command_buffer.len());
     }
   }
 }

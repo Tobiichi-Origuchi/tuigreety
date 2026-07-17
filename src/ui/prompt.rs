@@ -2,9 +2,11 @@ use std::sync::LazyLock;
 
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
+  style::Style,
   text::Span,
   widgets::{Block, BorderType, Borders, Paragraph},
 };
+use unicode_segmentation::UnicodeSegmentation;
 
 use super::common::style::Themed;
 use crate::{
@@ -13,7 +15,7 @@ use crate::{
   Mode,
   SecretDisplay,
   info::get_hostname,
-  ui::{Frame, prompt_value, util::*},
+  ui::{Frame, input, prompt_value, util::*},
 };
 
 const GREETING_INDEX: usize = 0;
@@ -23,14 +25,13 @@ const ANSWER_INDEX: usize = 3;
 static HOSTNAME: LazyLock<String> = LazyLock::new(get_hostname);
 
 fn mask_secret(pool: &str, length: usize) -> String {
-  pool.chars().cycle().take(length).collect()
+  pool.graphemes(true).cycle().take(length).collect()
 }
 
-pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
+pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
   let theme = &greeter.theme;
 
-  let size = f.area();
-  let (x, y, width, height) = get_rect_bounds(greeter, size, 0);
+  let container = get_rect(greeter, area, 0);
 
   let container_padding = greeter.container_padding();
   let prompt_padding = greeter.prompt_padding();
@@ -40,13 +41,7 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
     GreetAlign::Right => Alignment::Right,
   };
 
-  let container = Rect::new(x, y, width, height);
-  let frame = Rect::new(
-    x + container_padding,
-    y + container_padding,
-    width - (2 * container_padding),
-    height - (2 * container_padding),
-  );
+  let frame = inset(container, container_padding);
 
   let hostname = Span::from(titleize(&greeter.text.authenticate_title(&HOSTNAME)));
   let block = Block::default()
@@ -59,8 +54,9 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
 
   f.render_widget(block, container);
 
-  let (message, message_height) = get_message_height(greeter, container_padding, 1);
-  let (greeting, greeting_height) = get_greeting_height(greeter, container_padding, 0);
+  let visible_message = greeter.input_warning.as_deref().or(greeter.message.as_deref());
+  let (message, message_height) = get_message_height(visible_message, container.width, container_padding, 1);
+  let (greeting, greeting_height) = get_greeting_height(greeter, frame.width, 0);
 
   let should_display_answer = greeter.mode == Mode::Password;
 
@@ -75,8 +71,6 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
     .direction(Direction::Vertical)
     .constraints(constraints.as_ref())
     .split(frame);
-  let cursor = chunks[USERNAME_INDEX];
-
   if let Some(greeting) = greeting {
     let greeting_label = greeting.alignment(greeting_alignment).style(theme.of(&[Themed::Greet]));
 
@@ -94,23 +88,26 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
   };
 
   let username = greeter.username.get();
-  let username_value_text = Span::from(username);
-  let username_value = Paragraph::new(username_value_text).style(theme.of(&[Themed::Input]));
+  let mut cursor = None;
 
   match greeter.mode {
     Mode::Username | Mode::Password | Mode::Action => {
       f.render_widget(username_label, chunks[USERNAME_INDEX]);
 
       if !greeter.user_menu || !greeter.username.value.is_empty() {
-        f.render_widget(
-          username_value,
-          Rect::new(
-            1 + chunks[USERNAME_INDEX].x + text!(greeter, username).chars().count() as u16,
-            chunks[USERNAME_INDEX].y,
-            get_input_width(greeter, width, &Some(text!(greeter, username))),
-            1,
-          ),
-        );
+        let label = text!(greeter, username);
+        let username_area = input_area(chunks[USERNAME_INDEX], &label);
+        let username_cursor = if greeter.mode != Mode::Username {
+          0
+        } else if greeter.username.mask.is_some() {
+          username.len()
+        } else {
+          greeter.username_cursor
+        };
+        let rendered_cursor = render_input(f, username_area, username, username_cursor, theme.of(&[Themed::Input]));
+        if greeter.mode == Mode::Username {
+          cursor = rendered_cursor;
+        }
       }
 
       let answer_text = if greeter.auth_state.is_waiting() {
@@ -126,66 +123,52 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
 
         if !greeter.asking_for_secret || greeter.secret_display.show() {
           let value = match (greeter.asking_for_secret, &greeter.secret_display) {
-            (true, SecretDisplay::Character(pool)) => mask_secret(pool, greeter.buffer.chars().count()),
-
+            (true, SecretDisplay::Character(pool)) => mask_secret(pool, greeter.buffer.graphemes(true).count()),
             _ => greeter.buffer.clone(),
           };
-
-          let answer_value_text = Span::from(value);
-          let answer_value = Paragraph::new(answer_value_text).style(theme.of(&[Themed::Input]));
-
-          f.render_widget(
-            answer_value,
-            Rect::new(
-              chunks[ANSWER_INDEX].x + greeter.prompt_width() as u16,
-              chunks[ANSWER_INDEX].y,
-              get_input_width(greeter, width, &greeter.prompt),
-              1,
-            ),
-          );
+          let prompt = greeter.prompt.as_deref().unwrap_or_default();
+          let answer_area = input_area(chunks[ANSWER_INDEX], prompt);
+          let answer_cursor = match (greeter.asking_for_secret, &greeter.secret_display) {
+            (true, SecretDisplay::Character(pool)) => {
+              let entered = input::grapheme_count_before(&greeter.buffer, greeter.response_cursor);
+              mask_secret(pool, entered).len()
+            },
+            _ => greeter.response_cursor,
+          };
+          cursor = render_input(f, answer_area, &value, answer_cursor, theme.of(&[Themed::Input]));
+        } else {
+          let prompt = greeter.prompt.as_deref().unwrap_or_default();
+          let answer_area = input_area(chunks[ANSWER_INDEX], prompt);
+          cursor = area_cursor(answer_area, 0);
         }
       }
 
       if let Some(message) = message {
         let message = message.alignment(Alignment::Center);
-
-        f.render_widget(message, Rect::new(x, y + height, width, message_height));
+        let y = container.bottom();
+        let height = message_height.min(area.bottom().saturating_sub(y));
+        f.render_widget(message, Rect::new(container.x, y, container.width, height));
       }
     },
 
     _ => {},
   }
 
-  match greeter.mode {
-    Mode::Username => {
-      let username_length = greeter.username.get().chars().count();
-      let offset = get_cursor_offset(greeter, username_length);
+  cursor
+}
 
-      (
-        2 + cursor.x + text!(greeter, username).chars().count() as u16 + offset as u16,
-        USERNAME_INDEX as u16 + cursor.y,
-      )
-    },
-
-    Mode::Password => {
-      let answer_length = greeter.buffer.chars().count();
-      let offset = get_cursor_offset(greeter, answer_length);
-
-      if greeter.asking_for_secret && !greeter.secret_display.show() {
-        (
-          1 + cursor.x + greeter.prompt_width() as u16,
-          ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1,
-        )
-      } else {
-        (
-          1 + cursor.x + greeter.prompt_width() as u16 + offset as u16,
-          ANSWER_INDEX as u16 + prompt_padding + cursor.y - 1,
-        )
-      }
-    },
-
-    _ => (1, 1),
+fn render_input(f: &mut Frame, area: Rect, value: &str, cursor: usize, style: Style) -> Option<(u16, u16)> {
+  if area.width == 0 || area.height == 0 {
+    return None;
   }
+
+  let view = input::view(value, cursor, area.width);
+  f.render_widget(Paragraph::new(view.text).style(style), area);
+  area_cursor(area, view.cursor_column)
+}
+
+fn area_cursor(area: Rect, column: u16) -> Option<(u16, u16)> {
+  (area.width > 0 && area.height > 0 && column < area.width).then(|| (area.x.saturating_add(column), area.y))
 }
 
 #[cfg(test)]
@@ -203,5 +186,10 @@ mod tests {
   fn empty_secret_mask_is_safe() {
     assert_eq!(mask_secret("", 4), "");
     assert_eq!(mask_secret("*", 0), "");
+  }
+
+  #[test]
+  fn secret_mask_cycles_extended_graphemes() {
+    assert_eq!(mask_secret("👩‍💻界", 3), "👩‍💻界👩‍💻");
   }
 }

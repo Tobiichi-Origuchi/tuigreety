@@ -6,27 +6,19 @@ use ratatui::{
 
 use crate::{
   Greeter,
-  ui::{Frame, util::*},
+  ui::{Frame, common::style::Themed, util::*},
 };
 
-pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
-  let size = f.area();
-
-  let width = greeter.width();
-  let height: u16 = get_height(greeter) + 1;
-  let x = (size.width - width) / 2;
-  let y = (size.height - height) / 2;
-
-  let container = Rect::new(x, y, width, height);
+pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
+  let container = get_rect(greeter, area, 1);
   let container_padding = greeter.container_padding();
-  let frame = Rect::new(
-    x + container_padding,
-    y + container_padding,
-    width - (2 * container_padding),
-    height - (2 * container_padding),
-  );
+  let frame = inset(container, container_padding);
 
-  let block = Block::default().borders(Borders::ALL).border_type(BorderType::Plain);
+  let block = Block::default()
+    .style(greeter.theme.of(&[Themed::Container]))
+    .borders(Borders::ALL)
+    .border_type(BorderType::Plain)
+    .border_style(greeter.theme.of(&[Themed::Border]));
 
   let constraints = [Constraint::Length(1)];
 
@@ -37,8 +29,8 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
   let text = Span::from(text!(greeter, wait));
   let paragraph = Paragraph::new(text).alignment(Alignment::Center);
 
-  f.render_widget(paragraph, chunks[0]);
   f.render_widget(block, container);
+  f.render_widget(paragraph, chunks[0]);
 
-  (1, 1)
+  None
 }

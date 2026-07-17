@@ -235,8 +235,10 @@ pub struct Greeter {
   pub mode: Mode,
   // Mode the application will return to when exiting the current mode.
   pub previous_mode: Mode,
-  // Offset the cursor should be at from its base position for the current mode.
-  pub cursor_offset: i16,
+  // Absolute UTF-8 byte positions, always normalized to grapheme boundaries.
+  pub(crate) username_cursor: usize,
+  pub(crate) response_cursor: usize,
+  pub(crate) command_cursor: usize,
 
   // Authentication responses and the optional command editor must never
   // share storage: the latter is available before authentication and is a
@@ -291,6 +293,8 @@ pub struct Greeter {
   pub greeting: Option<String>,
   // Transaction message to show to the user.
   pub message: Option<String>,
+  // Non-secret, transient feedback from the local input editor.
+  pub(crate) input_warning: Option<String>,
 
   // Menu for power options.
   pub powers: Menu<Power>,
@@ -323,7 +327,9 @@ impl Default for Greeter {
       ipc_timeout: config::DEFAULT_IPC_TIMEOUT,
       mode: Mode::default(),
       previous_mode: Mode::default(),
-      cursor_offset: 0,
+      username_cursor: 0,
+      response_cursor: 0,
+      command_cursor: 0,
       buffer: String::new(),
       command_buffer: String::new(),
       session_source: SessionSource::default(),
@@ -348,6 +354,7 @@ impl Default for Greeter {
       refresh_rate: DEFAULT_REFRESH_RATE,
       greeting: None,
       message: None,
+      input_warning: None,
       powers: Menu::default(),
       power_setsid: false,
       mock: false,
@@ -492,9 +499,13 @@ impl Greeter {
     self.buffer.zeroize();
     self.command_buffer.zeroize();
     self.prompt.zeroize();
+    self.response_cursor = 0;
+    self.command_cursor = 0;
+    self.input_warning = None;
 
     if !soft {
       self.username.zeroize();
+      self.username_cursor = 0;
     }
 
     if scrub_message {
@@ -534,13 +545,15 @@ impl Greeter {
       .unwrap_or_default();
     self.command_buffer.zeroize();
     self.command_buffer = command;
-    self.cursor_offset = 0;
+    self.command_cursor = self.command_buffer.len();
+    self.input_warning = None;
     self.mode = Mode::Command;
   }
 
   pub fn close_command_editor(&mut self) {
     self.command_buffer.zeroize();
-    self.cursor_offset = 0;
+    self.command_cursor = 0;
+    self.input_warning = None;
     if self.mode == Mode::Command {
       self.mode = self.previous_mode;
     }
@@ -575,7 +588,7 @@ impl Greeter {
   // Returns the padding of the main window where content is displayed from the
   // provided arguments.
   pub fn container_padding(&self) -> u16 {
-    self.settings.container_padding + 1
+    self.settings.container_padding.saturating_add(1)
   }
 
   // Returns the spacing between each prompt from the provided arguments.
@@ -1027,6 +1040,8 @@ impl Greeter {
     } else {
       Some(format!("{prompt} "))
     };
+    self.response_cursor = self.buffer.len();
+    self.input_warning = None;
   }
 
   fn select_only_user(&mut self) {
@@ -1035,6 +1050,7 @@ impl Greeter {
       && let [user] = self.users.options.as_slice()
     {
       self.username = MaskedString::from(user.username.clone(), user.name.clone());
+      self.username_cursor = self.username.value.len();
     }
   }
 
@@ -1056,7 +1072,7 @@ impl Greeter {
   pub fn prompt_width(&self) -> usize {
     match &self.prompt {
       None => 0,
-      Some(prompt) => prompt.chars().count(),
+      Some(prompt) => crate::ui::input::width(prompt),
     }
   }
 }

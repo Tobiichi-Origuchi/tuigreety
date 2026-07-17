@@ -228,7 +228,7 @@ where
   I: IntoIterator<Item = U>,
   U: Borrow<uzers::User>,
 {
-  users
+  let mut users = users
     .into_iter()
     .filter(|user| {
       let user = user.borrow();
@@ -252,7 +252,14 @@ where
         },
       }
     })
-    .collect()
+    .collect::<Vec<_>>();
+  users.sort_by(|left, right| {
+    left
+      .username
+      .cmp(&right.username)
+      .then_with(|| left.name.cmp(&right.name))
+  });
+  users
 }
 
 pub fn get_min_max_uids(min_uid: Option<u32>, max_uid: Option<u32>) -> (u32, u32) {
@@ -648,9 +655,9 @@ mod user_tests {
     );
 
     assert_eq!(users.len(), 2);
-    assert_eq!(users[0].username, "joe");
-    assert_eq!(users[0].name.as_deref(), Some("Joe Example"));
-    assert_eq!(users[1].username, "bob");
-    assert_eq!(users[1].name, None);
+    assert_eq!(users[0].username, "bob");
+    assert_eq!(users[0].name, None);
+    assert_eq!(users[1].username, "joe");
+    assert_eq!(users[1].name.as_deref(), Some("Joe Example"));
   }
 }

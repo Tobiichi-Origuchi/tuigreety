@@ -1,30 +1,21 @@
 use ratatui::{
-  layout::{Constraint, Direction, Layout, Rect},
-  text::Span,
+  layout::{Alignment, Constraint, Direction, Layout, Rect},
   widgets::{Block, BorderType, Borders, Paragraph},
 };
 
 use super::common::style::Themed;
 use crate::{
   Greeter,
-  ui::{Frame, prompt_value, util::*},
+  ui::{Frame, input, prompt_value, util::*},
 };
 
-pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
+pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
   let theme = &greeter.theme;
 
-  let size = f.area();
-  let (x, y, width, height) = get_rect_bounds(greeter, size, 0);
+  let container = get_rect(greeter, area, 0);
 
   let container_padding = greeter.container_padding();
-
-  let container = Rect::new(x, y, width, height);
-  let frame = Rect::new(
-    x + container_padding,
-    y + container_padding,
-    width - container_padding,
-    height - container_padding,
-  );
+  let frame = inset(container, container_padding);
 
   let block = Block::default()
     .title(titleize(&text!(greeter, title_command)))
@@ -48,25 +39,29 @@ pub fn draw(greeter: &mut Greeter, f: &mut Frame) -> (u16, u16) {
 
   let command_label_text = prompt_value(theme, Some(text!(greeter, new_command)));
   let command_label = Paragraph::new(command_label_text).style(theme.of(&[Themed::Prompt]));
-  let command_value_text = Span::from(&greeter.command_buffer);
-  let command_value = Paragraph::new(command_value_text).style(theme.of(&[Themed::Input]));
 
   f.render_widget(command_label, chunks[0]);
-  f.render_widget(
-    command_value,
-    Rect::new(
-      1 + chunks[0].x + text!(greeter, new_command).chars().count() as u16,
-      chunks[0].y,
-      get_input_width(greeter, width, &Some(text!(greeter, new_command))),
-      1,
-    ),
-  );
+  let label = text!(greeter, new_command);
+  let input_area = input_area(cursor, &label);
+  if input_area.width == 0 || input_area.height == 0 {
+    return None;
+  }
 
-  let new_command = greeter.command_buffer.clone();
-  let offset = get_cursor_offset(greeter, new_command.chars().count());
+  let view = input::view(&greeter.command_buffer, greeter.command_cursor, input_area.width);
+  let command_value = Paragraph::new(view.text).style(theme.of(&[Themed::Input]));
+  f.render_widget(command_value, input_area);
 
-  (
-    2 + cursor.x + text!(greeter, new_command).chars().count() as u16 + offset as u16,
-    cursor.y + 1,
-  )
+  if let Some(warning) = greeter.input_warning.as_deref() {
+    let (warning, warning_height) = get_message_height(Some(warning), container.width, container_padding, 0);
+    if let Some(warning) = warning {
+      let y = container.bottom();
+      let height = warning_height.min(area.bottom().saturating_sub(y));
+      f.render_widget(
+        warning.alignment(Alignment::Center),
+        Rect::new(container.x, y, container.width, height),
+      );
+    }
+  }
+
+  Some((input_area.x.saturating_add(view.cursor_column), input_area.y))
 }

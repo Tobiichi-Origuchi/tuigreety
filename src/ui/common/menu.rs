@@ -12,7 +12,7 @@ use crate::{
   Greeter,
   ui::{
     Frame,
-    util::{get_rect_bounds, titleize},
+    util::{get_rect, titleize},
   },
 };
 
@@ -34,15 +34,26 @@ impl<T> Menu<T>
 where
   T: MenuItem,
 {
-  pub fn draw(&self, greeter: &Greeter, f: &mut Frame) -> (u16, u16) {
+  pub fn draw(&self, greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> {
     let theme = &greeter.theme;
 
-    let size = f.area();
-    let (x, y, width, height) = get_rect_bounds(greeter, size, self.options.len());
+    let container = get_rect(greeter, area, self.options.len());
+    let inner = crate::ui::util::inset(container, greeter.container_padding());
+    let visible = usize::from(inner.height);
+    let selected = self.selected.min(self.options.len().saturating_sub(1));
+    let start = selected.saturating_add(1).saturating_sub(visible);
 
-    let container = Rect::new(x, y, width, height);
-
-    let title = Span::from(titleize(&self.title));
+    let title = if self.options.len() > visible && !self.options.is_empty() {
+      titleize(&format!(
+        "{} [{}/{}]",
+        self.title,
+        selected.saturating_add(1),
+        self.options.len()
+      ))
+    } else {
+      titleize(&self.title)
+    };
+    let title = Span::from(title);
     let block = Block::default()
       .title(title)
       .title_style(theme.of(&[Themed::Title]))
@@ -51,27 +62,27 @@ where
       .border_type(BorderType::Plain)
       .border_style(theme.of(&[Themed::Border]));
 
-    for (index, option) in self.options.iter().enumerate() {
-      let name = option.format();
-      let name = format!("{:1$}", name, greeter.width() as usize - 4);
+    f.render_widget(block, container);
 
-      let frame = Rect::new(x + 2, y + 2 + index as u16, width - 4, 1);
-      let option_text = self.get_option(name, index);
+    for (row, (index, option)) in self.options.iter().enumerate().skip(start).take(visible).enumerate() {
+      let Ok(row) = u16::try_from(row) else {
+        break;
+      };
+      let frame = Rect::new(inner.x, inner.y.saturating_add(row), inner.width, 1);
+      let option_text = Self::get_option(option.format(), index, selected);
       let option = Paragraph::new(option_text);
 
       f.render_widget(option, frame);
     }
 
-    f.render_widget(block, container);
-
-    (1, 1)
+    None
   }
 
-  fn get_option<'g, S>(&self, name: S, index: usize) -> Span<'g>
+  fn get_option<'g, S>(name: S, index: usize, selected: usize) -> Span<'g>
   where
     S: Into<String>,
   {
-    if self.selected == index {
+    if selected == index {
       Span::styled(name.into(), Style::default().add_modifier(Modifier::REVERSED))
     } else {
       Span::from(name.into())

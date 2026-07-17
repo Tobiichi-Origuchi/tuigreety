@@ -198,6 +198,15 @@ unreadable or malformed update is rejected, preserving the last valid runtime
 configuration. Changes to *general.debug*, *general.log-file*, and *general.mock*
 require a restart.
 
+# INPUT EDITING
+
+Cursor movement and deletion follow Unicode grapheme boundaries. Long values
+scroll horizontally to keep the cursor visible. To bound work and memory before
+authentication, interactively typed usernames are limited to 256 UTF-8 bytes,
+PAM responses to 4096 bytes, and free-form commands to 16384 bytes. Rejected
+input produces an on-screen warning; configured or discovered values are not
+truncated.
+
 # AUTHORS
 
 Maintained by the tuigreet contributors.
