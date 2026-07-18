@@ -55,8 +55,16 @@ pub enum PowerCommand {
 
 impl PowerCommand {
   pub fn resolve(&self, option: PowerOption) -> Option<CommandLine> {
+    self.resolve_with(option, default_command)
+  }
+
+  pub(crate) fn resolve_with(
+    &self,
+    option: PowerOption,
+    default: impl FnOnce(PowerOption) -> Option<CommandLine>,
+  ) -> Option<CommandLine> {
     match self {
-      Self::Auto => default_command(option),
+      Self::Auto => default(option),
       Self::Disabled => None,
       Self::Explicit(command) => Some(command.clone()),
     }

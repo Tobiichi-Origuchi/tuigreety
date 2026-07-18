@@ -200,7 +200,8 @@ command-line mistakes do not prevent tuigreet from starting. See the example
 
 Power commands use exact argv arrays in TOML, with the program first and one
 item per argument. An omitted field uses the automatically detected default;
-*false* disables the action. Legacy command strings remain accepted and use the
+*false* disables and hides the action. Actions without an automatically detected
+or explicitly configured command are also hidden. Legacy command strings use the
 same shell-quoting parser as the command-line options, but are never run through
 a shell.
 

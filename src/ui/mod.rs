@@ -116,9 +116,15 @@ where
       status_label(theme, format!("F{}", greeter.kb_sessions)),
       status_value(&greeter, theme, Button::Session, text!(greeter, action_session)),
       Span::from(" "),
-      status_label(theme, format!("F{}", greeter.kb_power)),
-      status_value(&greeter, theme, Button::Power, text!(greeter, action_power)),
-      Span::from(" "),
+    ]);
+    if !greeter.powers.options.is_empty() {
+      status_left_spans.extend([
+        status_label(theme, format!("F{}", greeter.kb_power)),
+        status_value(&greeter, theme, Button::Power, text!(greeter, action_power)),
+        Span::from(" "),
+      ]);
+    }
+    status_left_spans.extend([
       status_label(theme, session_source_label),
       status_value(&greeter, theme, Button::Other, session_source),
     ]);
@@ -411,6 +417,33 @@ mod tests {
     let mut terminal = Terminal::new(backend).unwrap();
 
     draw(greeter, &mut terminal, true).await.unwrap();
+  }
+
+  #[tokio::test]
+  async fn power_key_hint_is_hidden_when_no_action_is_available() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+
+    draw(greeter.clone(), &mut terminal, true).await.unwrap();
+    let without_power = terminal
+      .backend()
+      .buffer()
+      .content
+      .iter()
+      .map(Cell::symbol)
+      .collect::<String>();
+    assert!(!without_power.contains("Power"));
+
+    greeter.write().await.powers.options.push(Power::default());
+    draw(greeter, &mut terminal, true).await.unwrap();
+    let with_power = terminal
+      .backend()
+      .buffer()
+      .content
+      .iter()
+      .map(Cell::symbol)
+      .collect::<String>();
+    assert!(with_power.contains("Power"));
   }
 
   #[tokio::test]

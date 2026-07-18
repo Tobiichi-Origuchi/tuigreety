@@ -18,7 +18,7 @@ use crate::{
   event::DEFAULT_REFRESH_RATE,
   info::{get_issue, get_min_max_uids, get_sessions, get_users, session_paths},
   ipc::AuthState,
-  power::PowerOption,
+  power::{CommandLine, PowerOption},
   text::Text,
   ui::{
     common::{
@@ -1235,6 +1235,14 @@ fn configured_environment(settings: &Settings) -> Option<Vec<String>> {
 }
 
 fn build_power_options(text: &Text, settings: &Settings) -> Vec<Power> {
+  build_power_options_with_default(text, settings, crate::power::default_command)
+}
+
+fn build_power_options_with_default(
+  text: &Text,
+  settings: &Settings,
+  default: impl Fn(PowerOption) -> Option<CommandLine> + Copy,
+) -> Vec<Power> {
   [
     (
       PowerOption::Shutdown,
@@ -1254,10 +1262,12 @@ fn build_power_options(text: &Text, settings: &Settings) -> Vec<Power> {
     ),
   ]
   .into_iter()
-  .map(|(action, label, command)| Power {
-    action,
-    label,
-    command: command.resolve(action),
+  .filter_map(|(action, label, command)| {
+    command.resolve_with(action, default).map(|command| Power {
+      action,
+      label,
+      command: Some(command),
+    })
   })
   .collect()
 }
@@ -1616,6 +1626,7 @@ mod test {
   use super::{
     DiscoveredSessions,
     ReloadPlan,
+    build_power_options_with_default,
     mock_sessions,
     parse_options_ignoring_invalid,
     print_information,
@@ -1625,6 +1636,9 @@ mod test {
     Greeter,
     Mode,
     SecretDisplay,
+    config::Settings,
+    power::{CommandLine, PowerCommand, PowerOption, default_command},
+    text::Text,
     ui::{
       common::menu::Menu,
       sessions::{Session, SessionSource, SessionType},
@@ -1641,6 +1655,39 @@ mod test {
       powers: None,
       warnings: Vec::new(),
     }
+  }
+
+  fn defaults_without_sleep(option: PowerOption) -> Option<CommandLine> {
+    match option {
+      PowerOption::Suspend | PowerOption::Hibernate => None,
+      _ => default_command(option),
+    }
+  }
+
+  #[test]
+  fn unavailable_and_disabled_power_actions_are_omitted() {
+    let mut settings = Settings::default();
+    let text = Text::default();
+
+    let automatic = build_power_options_with_default(&text, &settings, defaults_without_sleep);
+    assert_eq!(automatic.iter().map(|power| power.action).collect::<Vec<_>>(), [
+      PowerOption::Shutdown,
+      PowerOption::Reboot
+    ]);
+
+    settings.power_suspend = PowerCommand::Explicit(CommandLine::parse("custom-suspend").unwrap());
+    settings.power_hibernate = PowerCommand::Disabled;
+    let custom = build_power_options_with_default(&text, &settings, defaults_without_sleep);
+    assert_eq!(custom.iter().map(|power| power.action).collect::<Vec<_>>(), [
+      PowerOption::Shutdown,
+      PowerOption::Reboot,
+      PowerOption::Suspend
+    ]);
+
+    settings.power_shutdown = PowerCommand::Disabled;
+    settings.power_reboot = PowerCommand::Disabled;
+    settings.power_suspend = PowerCommand::Disabled;
+    assert!(build_power_options_with_default(&text, &settings, defaults_without_sleep).is_empty());
   }
 
   #[test]

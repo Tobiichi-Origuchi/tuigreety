@@ -248,7 +248,7 @@ By default, unless you change it, all X11 sessions (those picked up from `/usr/s
 
 ### Power management
 
-Four power actions are possible from `tuigreet`: shutting down, rebooting, suspending and hibernating the machine. Shutdown and reboot use `shutdown -h now` and `shutdown -r now`. Suspend and hibernate use `systemctl` when systemd is running and `loginctl` when elogind is running. If neither login manager can be identified, no default suspend or hibernate command is configured.
+Four power actions are possible from `tuigreet`: shutting down, rebooting, suspending and hibernating the machine. Shutdown and reboot use `shutdown -h now` and `shutdown -r now`. Suspend and hibernate use `systemctl` when systemd is running and `loginctl` when elogind is running. Actions without an automatically detected or explicitly configured command are omitted from the menu.
 
 The commands can be customized with `--power-shutdown`, `--power-reboot`, `--power-suspend` and `--power-hibernate`. Each option takes one shell-quoted string which is parsed into a program and literal arguments, then executed directly without a shell. Shell expansion, pipelines, redirection, and environment assignments are therefore not interpreted. The provided commands must be non-interactive, meaning they will not be able to print anything or prompt for anything. If you need to use `sudo` or `doas`, they will need to be configured to run passwordless for those specific commands.
 
@@ -267,7 +267,7 @@ shutdown = ["sudo", "systemctl", "poweroff"]
 suspend = false
 ```
 
-Omitting a power field selects the automatically detected default. Setting it to `false` disables that action, including its default. Legacy command strings are still accepted for compatibility and use the same shell-quoting parser as the command-line options; they are never executed by a shell.
+Omitting a power field selects the automatically detected default. Setting it to `false` disables and hides that action, including its default. Legacy command strings are still accepted for compatibility and use the same shell-quoting parser as the command-line options; they are never executed by a shell.
 
 Note that, by default, all commands are prefixed with `setsid` to completely detach the command from our TTY. If you would prefer to run the commands as is, or if `setsid` does not exist on your system, you can use `--power-no-setsid`.
 
