@@ -28,6 +28,7 @@ pub(super) use self::{
 };
 use crate::{
   AuthStatus,
+  CliInvocation,
   Greeter,
   event::{Event, Events},
   ui::sessions::SessionSource,
@@ -88,15 +89,12 @@ impl IntegrationRunner {
     wait_for_server(&socket_path, &mut server).await;
 
     let client = tokio::task::spawn(async move {
-      let mut greeter = Greeter::new().await;
+      let invocation = CliInvocation::parse(["tuigreet"]);
+      let mut greeter = Greeter::new_isolated(invocation.matches()).await;
       greeter.session_source = SessionSource::DefaultCommand("uname".to_string(), None);
 
       if let Some(builder) = builder {
         builder(&mut greeter);
-      }
-
-      if greeter.config.is_none() {
-        greeter.config = Greeter::options().parse([""]).ok().map(Arc::new);
       }
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();

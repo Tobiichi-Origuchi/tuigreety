@@ -168,9 +168,9 @@ struct ThemeLayer {
   button: Option<Option<String>>,
 }
 
-pub fn load(matches: &Matches) -> (Settings, Vec<String>) {
+pub(crate) fn load_from(system: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
   let explicit = matches.opt_str("config").map(PathBuf::from);
-  load_paths(Some(Path::new(SYSTEM_CONFIG)), explicit.as_deref(), matches)
+  load_paths(system, explicit.as_deref(), matches)
 }
 
 pub fn reload(matches: &Matches) -> Result<(Settings, Vec<String>), Vec<String>> {

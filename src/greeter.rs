@@ -1,10 +1,9 @@
 use std::{
-  env,
   error::Error,
   ffi::{OsStr, OsString},
   fmt::{self, Display},
-  path::PathBuf,
-  process,
+  path::{Path, PathBuf},
+  process::ExitCode,
   sync::Arc,
 };
 
@@ -154,6 +153,94 @@ impl CliOptions {
       .iter()
       .enumerate()
       .find(|(_, specification)| specification.short == Some(name))
+  }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CliAction {
+  Help,
+  CheckConfig,
+  Version,
+  Run,
+}
+
+pub(crate) struct CliInvocation {
+  matches: Arc<Matches>,
+  warnings: Vec<String>,
+  action: CliAction,
+}
+
+impl CliInvocation {
+  /// Parse a complete process argument vector. The first item is always the
+  /// program name and is never interpreted as an option or positional value.
+  pub(crate) fn parse<I, S>(args: I) -> Self
+  where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+  {
+    let args: Vec<OsString> = args
+      .into_iter()
+      .skip(1)
+      .map(|argument| argument.as_ref().to_owned())
+      .collect();
+    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &args);
+    let action = if matches.opt_present("help") {
+      CliAction::Help
+    } else if matches.opt_present("check-config") {
+      CliAction::CheckConfig
+    } else if matches.opt_present("version") {
+      CliAction::Version
+    } else {
+      CliAction::Run
+    };
+
+    Self {
+      matches: Arc::new(matches),
+      warnings,
+      action,
+    }
+  }
+
+  #[cfg(test)]
+  pub(crate) fn action(&self) -> CliAction {
+    self.action
+  }
+
+  pub(crate) fn matches(&self) -> Arc<Matches> {
+    Arc::clone(&self.matches)
+  }
+
+  #[cfg(test)]
+  pub(crate) fn warnings(&self) -> &[String] {
+    &self.warnings
+  }
+
+  pub(crate) fn report_warnings(&self) {
+    for warning in &self.warnings {
+      eprintln!("tuigreet: warning: {warning}");
+    }
+  }
+
+  pub(crate) fn handle_information(&self) -> Option<ExitCode> {
+    match self.action {
+      CliAction::Help => {
+        print_usage(Greeter::options());
+        Some(ExitCode::SUCCESS)
+      },
+      CliAction::CheckConfig => {
+        let valid = crate::config::check(&self.matches);
+        Some(if self.warnings.is_empty() && valid {
+          ExitCode::SUCCESS
+        } else {
+          ExitCode::FAILURE
+        })
+      },
+      CliAction::Version => {
+        print_version();
+        Some(ExitCode::SUCCESS)
+      },
+      CliAction::Run => None,
+    }
   }
 }
 
@@ -475,7 +562,16 @@ impl ReloadPlan {
 }
 
 impl Greeter {
-  pub async fn new() -> Self {
+  pub async fn new(config: Arc<Matches>) -> Self {
+    Self::new_with_config(config, Some(Path::new(config::SYSTEM_CONFIG)), true).await
+  }
+
+  #[cfg(test)]
+  pub(crate) async fn new_isolated(config: Arc<Matches>) -> Self {
+    Self::new_with_config(config, None, false).await
+  }
+
+  async fn new_with_config(config: Arc<Matches>, system_config: Option<&Path>, runtime_cache: bool) -> Self {
     let mut greeter = Self::default();
 
     greeter.powers = Menu {
@@ -483,18 +579,7 @@ impl Greeter {
       options: Default::default(),
       selected: 0,
     };
-
-    #[cfg(not(test))]
-    {
-      let args = crate::arguments_after_program(env::args_os());
-
-      if let Err(err) = greeter.parse_options(&args).await {
-        eprintln!("{err}");
-        print_usage(Greeter::options());
-
-        process::exit(1);
-      }
-    }
+    greeter.apply_config(config, system_config).await;
 
     greeter.logger = match crate::logger::init(greeter.debug, &greeter.logfile) {
       Ok(logger) => logger,
@@ -528,8 +613,7 @@ impl Greeter {
       selected: 0,
     };
 
-    #[cfg(not(test))]
-    {
+    if runtime_cache {
       greeter.cache_store = CacheStore::for_runtime(greeter.mock);
     }
 
@@ -879,29 +963,10 @@ impl Greeter {
     opts
   }
 
-  // Parses command line arguments to configured the software accordingly.
-  pub async fn parse_options<S>(&mut self, args: &[S]) -> Result<(), Box<dyn Error>>
-  where
-    S: AsRef<OsStr>,
-  {
-    let opts = Greeter::options();
+  async fn apply_config(&mut self, matches: Arc<Matches>, system_config: Option<&Path>) {
+    self.config = Some(matches);
 
-    let (matches, cli_warnings) = parse_options_ignoring_invalid(&opts, args);
-    for warning in cli_warnings {
-      eprintln!("tuigreet: warning: {warning}");
-    }
-    self.config = Some(Arc::new(matches));
-
-    if self.config().opt_present("help") {
-      print_usage(opts);
-      process::exit(0);
-    }
-    if self.config().opt_present("version") {
-      print_version();
-      process::exit(0);
-    }
-
-    let (settings, warnings) = config::load(self.config());
+    let (settings, warnings) = config::load_from(system_config, self.config());
     for warning in warnings {
       eprintln!("tuigreet: warning: {warning}");
     }
@@ -973,8 +1038,6 @@ impl Greeter {
     self.kb_command = settings.kb_command;
     self.kb_sessions = settings.kb_sessions;
     self.kb_power = settings.kb_power;
-
-    Ok(())
   }
 
   pub(crate) fn reload_snapshot(&self) -> ReloadSnapshot {
@@ -1284,39 +1347,6 @@ fn print_usage(opts: CliOptions) {
   eprint!("{}", opts.usage("Usage: tuigreet [OPTIONS]"));
 }
 
-pub fn print_information<S>(args: &[S]) -> bool
-where
-  S: AsRef<OsStr>,
-{
-  if args
-    .iter()
-    .any(|arg| matches!(arg.as_ref().to_str(), Some("-h" | "--help")))
-  {
-    print_usage(Greeter::options());
-    true
-  } else if args.iter().any(|arg| arg.as_ref().to_str() == Some("--check-config")) {
-    let opts = Greeter::options();
-    let (matches, warnings) = parse_options_ignoring_invalid(&opts, args);
-    for warning in &warnings {
-      eprintln!("tuigreet: warning: {warning}");
-    }
-    let config_valid = crate::config::check(&matches);
-    let valid = warnings.is_empty() && config_valid;
-    if !valid {
-      process::exit(1);
-    }
-    true
-  } else if args
-    .iter()
-    .any(|arg| matches!(arg.as_ref().to_str(), Some("-v" | "--version")))
-  {
-    print_version();
-    true
-  } else {
-    false
-  }
-}
-
 fn parse_options_ignoring_invalid<S>(opts: &CliOptions, args: &[S]) -> (Matches, Vec<String>)
 where
   S: AsRef<OsStr>,
@@ -1624,12 +1654,13 @@ mod test {
   use std::{ffi::OsString, os::unix::ffi::OsStringExt, path::PathBuf};
 
   use super::{
+    CliAction,
+    CliInvocation,
     DiscoveredSessions,
     ReloadPlan,
     build_power_options_with_default,
     mock_sessions,
     parse_options_ignoring_invalid,
-    print_information,
     version_information,
   };
   use crate::{
@@ -1876,10 +1907,10 @@ mod test {
   }
 
   #[test]
-  fn test_information_options() {
-    assert!(print_information(&["--help"]));
-    assert!(print_information(&["-v"]));
-    assert!(!print_information(&["--time"]));
+  fn information_actions_are_derived_from_parsed_options() {
+    assert_eq!(CliInvocation::parse(["tuigreet", "--help"]).action(), CliAction::Help);
+    assert_eq!(CliInvocation::parse(["tuigreet", "-v"]).action(), CliAction::Version);
+    assert_eq!(CliInvocation::parse(["tuigreet", "--time"]).action(), CliAction::Run);
   }
 
   #[test]
@@ -1894,12 +1925,93 @@ mod test {
 
   #[test]
   fn program_name_is_not_an_option() {
-    let args = crate::arguments_after_program(["tuigreet", "--mock"]);
-    let (matches, warnings) = parse_options_ignoring_invalid(&Greeter::options(), &args);
+    let invocation = CliInvocation::parse(["tuigreet", "--mock"]);
+    let matches = invocation.matches();
 
     assert!(matches.opt_present("mock"));
     assert!(matches.free.is_empty());
-    assert!(warnings.is_empty());
+    assert!(invocation.warnings().is_empty());
+  }
+
+  #[test]
+  fn clustered_information_flags_follow_getopts_semantics() {
+    assert_eq!(CliInvocation::parse(["tuigreet", "-hv"]).action(), CliAction::Help);
+    assert_eq!(CliInvocation::parse(["tuigreet", "-vh"]).action(), CliAction::Help);
+
+    let invocation = CliInvocation::parse(["tuigreet", "-dh", "--version"]);
+    assert_eq!(invocation.action(), CliAction::Version);
+    assert_eq!(invocation.matches().opt_str("debug").as_deref(), Some("h"));
+
+    let invocation = CliInvocation::parse(["tuigreet", "-d", "-h"]);
+    assert_eq!(invocation.action(), CliAction::Help);
+    assert!(invocation.matches().opt_present("debug"));
+  }
+
+  #[test]
+  fn information_spellings_used_as_values_do_not_become_actions() {
+    let invocation = CliInvocation::parse(["tuigreet", "--config", "--help", "--version"]);
+    assert_eq!(invocation.action(), CliAction::Version);
+    assert_eq!(invocation.matches().opt_str("config").as_deref(), Some("--help"));
+
+    let invocation = CliInvocation::parse(["tuigreet", "-c-h"]);
+    assert_eq!(invocation.action(), CliAction::Run);
+    assert_eq!(invocation.matches().opt_str("cmd").as_deref(), Some("-h"));
+
+    let invocation = CliInvocation::parse(["tuigreet", "--debug", "--help"]);
+    assert_eq!(invocation.action(), CliAction::Help);
+    assert!(invocation.matches().opt_present("debug"));
+  }
+
+  #[test]
+  fn double_dash_ends_information_option_parsing() {
+    let invocation = CliInvocation::parse(["tuigreet", "--version", "--", "--help", "--check-config"]);
+    assert_eq!(invocation.action(), CliAction::Version);
+    assert_eq!(invocation.warnings().len(), 2);
+
+    let invocation = CliInvocation::parse(["tuigreet", "--", "--help"]);
+    assert_eq!(invocation.action(), CliAction::Run);
+    assert_eq!(invocation.warnings().len(), 1);
+    assert!(invocation.warnings()[0].contains("positional argument '--help'"));
+  }
+
+  #[test]
+  fn argv_zero_and_non_utf8_arguments_have_distinct_handling() {
+    let invalid_program = OsString::from_vec(vec![b't', b'u', 0xff]);
+    let invalid_token = OsString::from_vec(vec![b'-', b'-', b'x', 0xff]);
+    let invalid_value = OsString::from_vec(vec![b'/', b't', b'm', b'p', b'/', 0xff]);
+    let invocation = CliInvocation::parse(vec![
+      invalid_program,
+      OsString::from("--time"),
+      invalid_token,
+      OsString::from("--config"),
+      invalid_value,
+      OsString::from("--mock"),
+    ]);
+
+    assert_eq!(invocation.action(), CliAction::Run);
+    assert!(invocation.matches().opt_present("time"));
+    assert!(!invocation.matches().opt_present("config"));
+    assert!(invocation.matches().opt_present("mock"));
+    assert_eq!(invocation.warnings().len(), 2);
+    assert!(
+      invocation
+        .warnings()
+        .iter()
+        .all(|warning| warning.contains("not valid UTF-8"))
+    );
+
+    let invocation = CliInvocation::parse(["wrapper", "tuigreet", "--mock"]);
+    assert!(invocation.matches().opt_present("mock"));
+    assert_eq!(invocation.warnings().len(), 1);
+    assert!(invocation.warnings()[0].contains("positional argument 'tuigreet'"));
+  }
+
+  #[test]
+  fn check_config_precedes_version_and_treats_cli_warnings_as_invalid() {
+    let invocation = CliInvocation::parse(["tuigreet", "--version", "--check-config", "--unknown"]);
+
+    assert_eq!(invocation.action(), CliAction::CheckConfig);
+    assert_eq!(invocation.warnings().len(), 1);
   }
 
   #[test]
@@ -2059,17 +2171,14 @@ mod test {
 
   #[tokio::test]
   async fn test_session_paths_are_deduplicated() {
-    let mut greeter = Greeter::default();
-
-    greeter
-      .parse_options(&[
-        "--sessions",
-        "/sessions:/sessions",
-        "--xsessions",
-        "/sessions:/sessions",
-      ])
-      .await
-      .unwrap();
+    let invocation = CliInvocation::parse([
+      "tuigreet",
+      "--sessions",
+      "/sessions:/sessions",
+      "--xsessions",
+      "/sessions:/sessions",
+    ]);
+    let greeter = Greeter::new_isolated(invocation.matches()).await;
 
     assert_eq!(greeter.session_paths.len(), 2);
     assert_eq!(
@@ -2136,16 +2245,15 @@ mod test {
 
   #[tokio::test]
   async fn test_command_line_arguments() {
-    type Case<'a> = (&'a [&'a str], bool, Option<fn(&Greeter)>);
+    type Case<'a> = (&'a [&'a str], Option<fn(&Greeter)>);
 
     let table: &[Case<'_>] = &[
       // No arguments
-      (&[], true, None),
+      (&[], None),
       // Valid combinations
-      (&["--cmd", "hello"], true, None),
+      (&["--cmd", "hello"], None),
       (
         &["--allow-command-editor"],
-        true,
         Some(|greeter| assert!(greeter.allow_command_editor)),
       ),
       (
@@ -2157,13 +2265,12 @@ mod test {
           "--cmd",
           "hello",
         ],
-        true,
         Some(|greeter| {
           assert!(greeter.config().opt_present("time"));
           assert!(matches!(&greeter.session_source, SessionSource::DefaultCommand(cmd, None) if cmd == "hello"));
         }),
       ),
-      (&["-z", "--remember"], true, Some(|greeter| assert!(greeter.remember))),
+      (&["-z", "--remember"], Some(|greeter| assert!(greeter.remember))),
       (
         &[
           "--cmd",
@@ -2185,7 +2292,6 @@ mod test {
           "12",
           "--user-menu",
         ],
-        true,
         Some(|greeter| {
           assert!(
             matches!(&greeter.session_source, SessionSource::DefaultCommand(cmd, Some(env)) if cmd == "uname" && env.len() == 2)
@@ -2209,21 +2315,18 @@ mod test {
       ),
       (
         &["--xsession-wrapper", "mywrapper.sh"],
-        true,
         Some(|greeter| {
           assert!(matches!(greeter.xsession_wrapper.as_deref(), Some("mywrapper.sh")));
         }),
       ),
       (
         &["--no-xsession-wrapper"],
-        true,
         Some(|greeter| {
           assert!(greeter.xsession_wrapper.is_none());
         }),
       ),
       (
         &["--power-suspend", "do-suspend", "--power-hibernate", "do-hibernate"],
-        true,
         Some(|greeter| {
           assert_eq!(greeter.powers.options[2].command.as_ref().unwrap().argv(), [
             "do-suspend"
@@ -2241,62 +2344,50 @@ mod test {
           "--user-menu-max-uid",
           "70000",
         ],
-        true,
         None,
       ),
-      (&["--mock"], true, Some(|greeter| assert!(greeter.mock))),
+      (&["--mock"], Some(|greeter| assert!(greeter.mock))),
       (
         &["--user-autocomplete"],
-        true,
         Some(|greeter| assert!(greeter.user_autocomplete)),
       ),
       (
         &["--refresh-rate", "60"],
-        true,
         Some(|greeter| assert_eq!(greeter.refresh_rate, 60)),
       ),
       (
         &["--ipc-timeout", "60"],
-        true,
         Some(|greeter| assert_eq!(greeter.ipc_timeout, 60)),
       ),
       // Unknown options are ignored
-      (&["--asterisk-char", ""], true, None),
-      (&["--min-uid", "10000", "--max-uid", "5000"], true, None),
+      (&["--asterisk-char", ""], None),
+      (&["--min-uid", "10000", "--max-uid", "5000"], None),
       // Invalid values and combinations are ignored without preventing startup.
-      (&["--remember-session", "--remember-user-session"], true, None),
-      (
-        &["--remember-user-session"],
-        true,
-        Some(|greeter| assert!(greeter.remember)),
-      ),
-      (&["--issue", "--greeting", "Hello, world!"], true, None),
-      (&["--kb-command", "F2", "--kb-sessions", "F2"], true, None),
-      (&["--time-format", "%i %"], true, None),
-      (&["--refresh-rate", "0"], true, None),
-      (&["--refresh-rate", "241"], true, None),
-      (&["--refresh-rate", "fast"], true, None),
-      (&["--ipc-timeout", "0"], true, None),
-      (&["--ipc-timeout", "3601"], true, None),
-      (&["--cmd", "cmd", "--env"], true, None),
-      (&["--cmd", "cmd", "--env", "A"], true, None),
+      (&["--remember-session", "--remember-user-session"], None),
+      (&["--remember-user-session"], Some(|greeter| assert!(greeter.remember))),
+      (&["--issue", "--greeting", "Hello, world!"], None),
+      (&["--kb-command", "F2", "--kb-sessions", "F2"], None),
+      (&["--time-format", "%i %"], None),
+      (&["--refresh-rate", "0"], None),
+      (&["--refresh-rate", "241"], None),
+      (&["--refresh-rate", "fast"], None),
+      (&["--ipc-timeout", "0"], None),
+      (&["--ipc-timeout", "3601"], None),
+      (&["--cmd", "cmd", "--env"], None),
+      (&["--cmd", "cmd", "--env", "A"], None),
     ];
 
-    for (opts, valid, check) in table {
-      let mut greeter = Greeter::default();
+    for (opts, check) in table {
+      let invocation = CliInvocation::parse(std::iter::once("tuigreet").chain(opts.iter().copied()));
+      assert_eq!(
+        invocation.action(),
+        CliAction::Run,
+        "{opts:?} selected an information action"
+      );
+      let greeter = Greeter::new_isolated(invocation.matches()).await;
 
-      match valid {
-        true => {
-          assert!(
-            matches!(greeter.parse_options(opts).await, Ok(())),
-            "{opts:?} cannot be parsed"
-          );
-
-          if let Some(check) = check {
-            check(&greeter);
-          }
-        },
-        false => assert!(greeter.parse_options(opts).await.is_err()),
+      if let Some(check) = check {
+        check(&greeter);
       }
     }
   }

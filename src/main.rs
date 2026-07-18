@@ -21,7 +21,7 @@ mod watcher;
 #[cfg(test)]
 mod integration;
 
-use std::{env, error::Error, io, process, sync::Arc, time::Duration};
+use std::{env, error::Error, io, process::ExitCode, sync::Arc, time::Duration};
 
 use event::{Control, Event};
 use ipc::AuthState;
@@ -41,28 +41,23 @@ const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[tokio::main]
-async fn main() {
-  let args = arguments_after_program(env::args_os());
-  if print_information(&args) {
-    return;
+async fn main() -> ExitCode {
+  let invocation = CliInvocation::parse(env::args_os());
+  invocation.report_warnings();
+  if let Some(status) = invocation.handle_information() {
+    return status;
   }
 
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
-  let greeter = Greeter::new().await;
+  let greeter = Greeter::new(invocation.matches()).await;
   events.set_refresh_rate(greeter.refresh_rate);
 
-  if let Err(error) = run(backend, greeter, events).await {
-    if let Some(AuthStatus::Success) = error.downcast_ref::<AuthStatus>() {
-      return;
-    }
-
-    process::exit(1);
+  match run(backend, greeter, events).await {
+    Err(error) if matches!(error.downcast_ref::<AuthStatus>(), Some(AuthStatus::Success)) => ExitCode::SUCCESS,
+    Ok(()) => ExitCode::SUCCESS,
+    Err(_) => ExitCode::FAILURE,
   }
-}
-
-fn arguments_after_program<T>(args: impl IntoIterator<Item = T>) -> Vec<T> {
-  args.into_iter().skip(1).collect()
 }
 
 async fn run<B>(backend: B, mut greeter: Greeter, mut events: Events) -> Result<(), Box<dyn Error>>
