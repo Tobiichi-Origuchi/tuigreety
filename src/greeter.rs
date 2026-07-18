@@ -5,6 +5,7 @@ use std::{
   fmt::{self, Display},
   path::PathBuf,
   process,
+  sync::Arc,
 };
 
 use getopts::{Matches, Options};
@@ -231,7 +232,7 @@ pub struct Greeter {
   pub logger: Option<WorkerGuard>,
 
   pub text: Text,
-  pub config: Option<Matches>,
+  pub config: Option<Arc<Matches>>,
   pub settings: Settings,
   pub socket: String,
   pub ipc_timeout: u16,
@@ -668,7 +669,15 @@ impl Greeter {
   }
 
   pub fn config(&self) -> &Matches {
-    self.config.as_ref().unwrap()
+    self.config.as_deref().unwrap()
+  }
+
+  pub(crate) fn config_handle(&self) -> Arc<Matches> {
+    self
+      .config
+      .as_ref()
+      .expect("configuration was parsed at startup")
+      .clone()
   }
 
   pub fn option(&self, name: &str) -> Option<String> {
@@ -889,7 +898,7 @@ impl Greeter {
     for warning in cli_warnings {
       eprintln!("tuigreet: warning: {warning}");
     }
-    self.config = Some(matches);
+    self.config = Some(Arc::new(matches));
 
     if self.config().opt_present("help") {
       print_usage(opts);

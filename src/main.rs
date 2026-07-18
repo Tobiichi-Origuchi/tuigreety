@@ -10,6 +10,7 @@ mod ipc;
 mod keyboard;
 mod logger;
 mod power;
+mod reload;
 mod terminal;
 mod text;
 mod ui;
@@ -77,6 +78,7 @@ where
     greeter.auth_state = AuthState::CreatingSession;
   }
   let greeter = Arc::new(RwLock::new(greeter));
+  let mut reloads = reload::ReloadCoordinator::new()?;
 
   #[cfg(not(test))]
   watcher::spawn(config::watched_paths(greeter.read().await.config()), events.sender());
@@ -138,6 +140,43 @@ where
           Some(Control::Exit(AuthStatus::Failure))
         },
 
+        outcome = reloads.next(), if reloads.has_pending() => {
+          match outcome {
+            reload::ReloadOutcome::Ready { plan, warnings } => {
+              for warning in warnings {
+                tracing::warn!("configuration reload: {warning}");
+              }
+              let applied = greeter.write().await.apply_reload(*plan);
+              for warning in &applied.warnings {
+                tracing::warn!("configuration reload: {warning}");
+              }
+              #[cfg(not(test))]
+              if applied.clear_command_cache {
+                crate::info::delete_last_command();
+                if let Some(username) = &applied.cache_username {
+                  crate::info::delete_last_user_command(username);
+                }
+              }
+              events.set_refresh_rate(applied.refresh_rate);
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
+            },
+            reload::ReloadOutcome::Rejected { warnings } => {
+              for warning in warnings {
+                tracing::warn!("configuration reload rejected: {warning}");
+              }
+            },
+            reload::ReloadOutcome::Failed => {
+              tracing::error!("configuration reload worker panicked; keeping the previous settings");
+            },
+            reload::ReloadOutcome::WorkerStopped => {
+              tracing::error!("configuration reload worker stopped unexpectedly");
+            },
+          }
+          None
+        },
+
         _ = cursor_interval.tick() => {
           cursor_on = !cursor_on;
           ui::draw(greeter.clone(), &mut terminal, cursor_on)
@@ -157,40 +196,12 @@ where
             .await
             .map_err(|error| error.to_string())?,
           Some(Event::ReloadConfig) => {
-            let applied = {
-              let mut greeter = greeter.write().await;
-              match config::reload(greeter.config()) {
-                Ok((settings, warnings)) => {
-                  for warning in warnings {
-                    tracing::warn!("configuration reload: {warning}");
-                  }
-                  let plan = ReloadPlan::prepare(greeter.reload_snapshot(), settings);
-                  let applied = greeter.apply_reload(plan);
-                  for warning in &applied.warnings {
-                    tracing::warn!("configuration reload: {warning}");
-                  }
-                  Some(applied)
-                },
-                Err(warnings) => {
-                  for warning in warnings {
-                    tracing::warn!("configuration reload rejected: {warning}");
-                  }
-                  None
-                },
-              }
+            let (config, snapshot) = {
+              let greeter = greeter.read().await;
+              (greeter.config_handle(), greeter.reload_snapshot())
             };
-            if let Some(applied) = applied {
-              #[cfg(not(test))]
-              if applied.clear_command_cache {
-                crate::info::delete_last_command();
-                if let Some(username) = &applied.cache_username {
-                  crate::info::delete_last_user_command(username);
-                }
-              }
-              events.set_refresh_rate(applied.refresh_rate);
-              ui::draw(greeter.clone(), &mut terminal, cursor_on)
-                .await
-                .map_err(|error| error.to_string())?;
+            if let Err(error) = reloads.request(config, snapshot) {
+              tracing::error!("{error}");
             }
             None
           },

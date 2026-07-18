@@ -96,7 +96,7 @@ impl IntegrationRunner {
       }
 
       if greeter.config.is_none() {
-        greeter.config = Greeter::options().parse(&[""]).ok();
+        greeter.config = Greeter::options().parse([""]).ok().map(Arc::new);
       }
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();
