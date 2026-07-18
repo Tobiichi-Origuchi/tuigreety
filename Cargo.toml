@@ -1,6 +1,6 @@
 [package]
 name         = "tuigreety"
-version      = "0.10.2"
+version      = "0.10.3"
 description  = "A console greeter for greetd"
 license      = "GPL-3.0-or-later"
 repository   = "https://github.com/Tobiichi-Origuchi/tuigreety"

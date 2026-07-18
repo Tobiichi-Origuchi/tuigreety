@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.10.3 - 2026-07-18
+
+### Added
+
+- [`db6a095`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/db6a09577db5b3ce0671a57d884c212f7c170798) Add `--ipc-timeout` and `general.ipc-timeout` controls for greetd transactions, with a 120-second default.
+
+### Changed
+
+- [`d891a6f`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/d891a6fc4a980996b6879a76a1d75792feebba46) Follow the Desktop Entry specification when discovering sessions, including `Type`, `Hidden`, `TryExec`, desktop-ID priority, and deterministic ordering.
+- [`1d7873a`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/1d7873af54dce0c6211cca4a46804695af6c4875) Parse session `Exec` values with specification-compliant quoting and field-code handling while preserving exact arguments through greetd's shell invocation.
+- [`f81f9e9`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/f81f9e971ea2a1f12d20d2d94883a3e1f552caa9) Make text editing grapheme-aware and keep long input fields and menus usable through horizontal and vertical viewports.
+
+### Fixed
+
+- [`2843417`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/28434171530c5e5a740b9e9a037d41e0b56d3536) Make multi-character password masks cycle predictably and prevent an empty mask from causing a panic.
+- [`172f39b`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/172f39b536a15be60b68bfa4c4eb0b1da83770f2) Ignore key-release events, handle repeated keys and compound modifiers correctly, and reveal an empty-prefix username completion only when exactly one eligible user exists.
+- [`250d9ac`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/250d9ac4148439e6c25a83863ef18dfc7f31d0a6) Correct `--version` and packaged notices to identify Tuigreety, its derivative status, both copyright holders, and the GPLv3+ license.
+- [`606f785`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/606f7852302c21a700e245ed9e71d1ceea1439e6) Start the selected session command consistently in both debug and release builds.
+- [`db6a095`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/db6a09577db5b3ce0671a57d884c212f7c170798) Prevent greetd errors or stalled PAM exchanges from freezing the greeter; failures are surfaced, recoverable connections are retried, cancellation remains responsive, and state changes render immediately.
+- [`ebf89eb`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/ebf89ebc0e4ac7dc8ab56490f4040fa129b2ac4f) Restore raw mode, the alternate screen, and cursor visibility after normal exits, errors, panics, power actions, `SIGINT`, and `SIGTERM`.
+- [`f81f9e9`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/f81f9e971ea2a1f12d20d2d94883a3e1f552caa9) Prevent layout overflow and cursor errors on tiny terminals, extreme dimensions, and Unicode input; oversized interactive values now produce a visible warning instead of growing without bound.
+
+### Security
+
+- [`3a44314`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/3a443144d225bfb5f93557c46c6f6ccc8967a774) Isolate and zeroize command-editor input so opening or closing nested menus cannot replace or retain a PAM response.
+
 ## 0.10.2 - 2026-07-17
 
 ### Added
