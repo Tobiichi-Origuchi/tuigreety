@@ -684,7 +684,7 @@ mod test {
   #[tokio::test]
   #[cfg(debug_assertions)]
   async fn ctrl_x_does_not_block_on_a_full_event_queue() {
-    let events = Events::new().await;
+    let events = Events::testing().await;
     fill_event_queue(&events);
     let mut state = Greeter::default();
     state.auth_state = crate::ipc::AuthState::ContinuingAuth;

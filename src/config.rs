@@ -214,8 +214,7 @@ fn active_paths(matches: &Matches) -> Vec<PathBuf> {
   paths
 }
 
-#[cfg(not(test))]
-pub fn watched_paths(matches: &Matches) -> Vec<PathBuf> {
+pub(crate) fn watched_paths(matches: &Matches) -> Vec<PathBuf> {
   active_paths(matches)
 }
 

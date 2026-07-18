@@ -1051,7 +1051,7 @@ mod test {
 
   #[tokio::test]
   async fn cancellation_is_available_while_waiting_for_greetd() {
-    let events = Events::new().await;
+    let events = Events::testing().await;
     let (control_tx, _control_rx) = tokio::sync::mpsc::unbounded_channel();
     let mut state = Greeter::default();
     state.mock = true;
@@ -1151,7 +1151,7 @@ mod test {
 
   #[tokio::test]
   async fn successful_session_exit_does_not_block_on_a_full_event_queue() {
-    let events = Events::new().await;
+    let events = Events::testing().await;
     fill_event_queue(&events);
 
     let mut state = Greeter::default();

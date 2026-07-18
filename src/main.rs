@@ -15,7 +15,6 @@ mod reload;
 mod terminal;
 mod text;
 mod ui;
-#[cfg(not(test))]
 mod watcher;
 
 #[cfg(test)]
@@ -30,7 +29,10 @@ use tokio::sync::{RwLock, mpsc};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
-use crate::terminal::{TerminalSession, TerminationSignals};
+use crate::{
+  terminal::{TerminalSession, TerminationSignals},
+  watcher::{ConfigWatcher, WatchOutcome},
+};
 
 #[cfg(not(test))]
 const CURSOR_BLINK_INTERVAL: Duration = Duration::from_millis(500);
@@ -48,19 +50,28 @@ async fn main() -> ExitCode {
     return status;
   }
 
+  let matches = invocation.matches();
+  // Fingerprint before loading. If a config changes anywhere during startup,
+  // the watcher observes it relative to this baseline and requests a reload.
+  let watcher = ConfigWatcher::spawn(ConfigWatcher::capture(config::watched_paths(&matches)));
+  let greeter = Greeter::new(matches).await;
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
-  let greeter = Greeter::new(invocation.matches()).await;
   events.set_refresh_rate(greeter.refresh_rate);
 
-  match run(backend, greeter, events).await {
+  match run(backend, greeter, events, watcher).await {
     Err(error) if matches!(error.downcast_ref::<AuthStatus>(), Some(AuthStatus::Success)) => ExitCode::SUCCESS,
     Ok(()) => ExitCode::SUCCESS,
     Err(_) => ExitCode::FAILURE,
   }
 }
 
-async fn run<B>(backend: B, mut greeter: Greeter, mut events: Events) -> Result<(), Box<dyn Error>>
+async fn run<B>(
+  backend: B,
+  mut greeter: Greeter,
+  mut events: Events,
+  mut watcher: ConfigWatcher,
+) -> Result<(), Box<dyn Error>>
 where
   B: ratatui::backend::Backend,
   B::Error: 'static,
@@ -76,9 +87,6 @@ where
   let mut reloads = reload::ReloadCoordinator::new()?;
   let mut power_supervisor = power::PowerSupervisor::new();
   let mut power_return_state = None;
-
-  #[cfg(not(test))]
-  watcher::spawn(config::watched_paths(greeter.read().await.config()), events.sender());
 
   // Register signal listeners before changing terminal modes, then let the
   // guard own every mode change until the Ratatui terminal has been dropped.
@@ -150,6 +158,32 @@ where
           None
         },
 
+        outcome = watcher.next(), if watcher.has_active() => {
+          match outcome {
+            WatchOutcome::Changed => {
+              let (config, snapshot) = {
+                let greeter = greeter.read().await;
+                (greeter.config_handle(), greeter.reload_snapshot())
+              };
+              if let Err(error) = reloads.request(config, snapshot) {
+                report_reload_failure(&error);
+                greeter.write().await.config_notice = Some("Configuration reload is unavailable".into());
+                ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                  .await
+                  .map_err(|error| error.to_string())?;
+              }
+            },
+            WatchOutcome::Stopped(message) => {
+              report_watcher_failure(&message);
+              greeter.write().await.config_notice = Some("Configuration hot reload is unavailable".into());
+              ui::draw(greeter.clone(), &mut terminal, cursor_on)
+                .await
+                .map_err(|error| error.to_string())?;
+            },
+          }
+          None
+        },
+
         outcome = reloads.next(), if reloads.has_pending() => {
           match outcome {
             reload::ReloadOutcome::Ready { plan, mut warnings } => {
@@ -218,33 +252,19 @@ where
           None
         },
 
-        event = events.next() => match event {
-          Some(Event::Render) => {
+        event = events.next_result() => match event {
+          Ok(Event::Render) => {
             ui::draw(greeter.clone(), &mut terminal, cursor_on)
               .await
               .map_err(|error| error.to_string())?;
             None
           },
-          Some(Event::Key(key)) => {
+          Ok(Event::Key(key)) => {
             keyboard::handle_with_power(greeter.clone(), key, ipc.clone(), power_supervisor.has_active())
               .await
               .map_err(|error| error.to_string())?
           },
-          Some(Event::ReloadConfig) => {
-            let (config, snapshot) = {
-              let greeter = greeter.read().await;
-              (greeter.config_handle(), greeter.reload_snapshot())
-            };
-            if let Err(error) = reloads.request(config, snapshot) {
-              report_reload_failure(&error);
-              greeter.write().await.config_notice = Some("Configuration reload is unavailable".into());
-              ui::draw(greeter.clone(), &mut terminal, cursor_on)
-                .await
-                .map_err(|error| error.to_string())?;
-            }
-            None
-          },
-          None => None,
+          Err(error) => break Err(format!("terminal event worker failed: {error}")),
         },
       };
 
@@ -284,10 +304,14 @@ where
   }
   .await;
 
+  watcher.shutdown().await;
   power_supervisor.shutdown().await;
   ipc.shutdown();
   if !ipc_actor_finished && let Err(error) = ipc_actor.await {
     tracing::error!("greetd IPC actor failed during shutdown: {error}");
+  }
+  if let Err(error) = events.shutdown().await {
+    tracing::error!("terminal event worker failed during shutdown: {error}");
   }
   let exit_status = loop_result.map_err(io::Error::other)?;
   match exit_status {
@@ -355,6 +379,11 @@ fn report_reload_diagnostics(state: &str, diagnostics: &[String]) {
 fn report_reload_failure(message: &str) {
   eprintln!("tuigreet: error: {message}");
   tracing::error!("{message}");
+}
+
+fn report_watcher_failure(message: &str) {
+  eprintln!("tuigreet: warning: {message}");
+  tracing::warn!("{message}");
 }
 
 fn report_cache_failure(message: &str) {

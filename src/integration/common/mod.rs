@@ -32,6 +32,7 @@ use crate::{
   Greeter,
   event::{Event, Events},
   ui::sessions::SessionSource,
+  watcher::ConfigWatcher,
 };
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -75,7 +76,7 @@ impl IntegrationRunner {
     let socket_path = socket.to_path_buf();
 
     let (backend, buffer, tick) = TestBackend::new(size.0, size.1);
-    let events = Events::new().await;
+    let events = Events::testing().await;
     let sender = events.sender();
 
     let mut server = tokio::task::spawn({
@@ -99,7 +100,7 @@ impl IntegrationRunner {
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();
       greeter.socket = socket_path.to_str().unwrap().to_string();
-      match crate::run(backend, greeter, events).await {
+      match crate::run(backend, greeter, events, ConfigWatcher::disabled()).await {
         Ok(()) => Err("tuigreet returned without an authentication status".to_string()),
         Err(error) => match error.downcast_ref::<AuthStatus>() {
           Some(status) => Ok(*status),

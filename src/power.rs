@@ -695,7 +695,7 @@ mod tests {
 
   #[tokio::test]
   async fn mock_power_does_not_block_on_a_full_event_queue() {
-    let events = Events::new().await;
+    let events = Events::testing().await;
     fill_event_queue(&events);
 
     let mut greeter = Greeter::default();
@@ -712,7 +712,7 @@ mod tests {
 
   #[tokio::test]
   async fn real_power_does_not_block_on_a_full_event_queue() {
-    let events = Events::new().await;
+    let events = Events::testing().await;
     fill_event_queue(&events);
 
     let mut greeter = Greeter::default();
