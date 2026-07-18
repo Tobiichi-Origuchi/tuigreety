@@ -22,16 +22,10 @@ nix::ioctl_read_bad!(get_keyboard_led_flags, 0x4B64, u8);
 use crate::{
   desktop_entry::{parse_exec, shell_join},
   ui::{
-    common::masked::MaskedString,
     sessions::{Session, SessionType},
     users::User,
   },
 };
-
-const LAST_USER_USERNAME: &str = "/var/cache/tuigreet/lastuser";
-const LAST_USER_NAME: &str = "/var/cache/tuigreet/lastuser-name";
-const LAST_COMMAND: &str = "/var/cache/tuigreet/lastsession";
-const LAST_SESSION: &str = "/var/cache/tuigreet/lastsession-path";
 
 const DEFAULT_MIN_UID: u32 = 1000;
 const DEFAULT_MAX_UID: u32 = 60000;
@@ -115,105 +109,6 @@ pub fn get_issue() -> Option<String> {
   }
 
   None
-}
-
-pub fn get_last_user_username() -> Option<String> {
-  match fs::read_to_string(LAST_USER_USERNAME).ok() {
-    None => None,
-    Some(username) => {
-      let username = username.trim();
-
-      if username.is_empty() {
-        None
-      } else {
-        Some(username.to_string())
-      }
-    },
-  }
-}
-
-pub fn get_last_user_name() -> Option<String> {
-  match fs::read_to_string(LAST_USER_NAME).ok() {
-    None => None,
-    Some(name) => {
-      let name = name.trim();
-
-      if name.is_empty() { None } else { Some(name.to_string()) }
-    },
-  }
-}
-
-pub fn write_last_username(username: &MaskedString) {
-  let _ = fs::write(LAST_USER_USERNAME, &username.value);
-
-  if let Some(ref name) = username.mask {
-    let _ = fs::write(LAST_USER_NAME, name);
-  } else {
-    let _ = fs::remove_file(LAST_USER_NAME);
-  }
-}
-
-pub fn get_last_session_path() -> Result<PathBuf, io::Error> {
-  Ok(PathBuf::from(fs::read_to_string(LAST_SESSION)?.trim()))
-}
-
-pub fn get_last_command() -> Result<String, io::Error> {
-  Ok(fs::read_to_string(LAST_COMMAND)?.trim().to_string())
-}
-
-pub fn write_last_session_path<P>(session: &P)
-where
-  P: AsRef<Path>,
-{
-  let _ = fs::write(LAST_SESSION, session.as_ref().to_string_lossy().as_bytes());
-}
-
-pub fn write_last_command(session: &str) {
-  let _ = fs::write(LAST_COMMAND, session);
-}
-
-pub fn get_last_user_session(username: &str) -> Result<PathBuf, io::Error> {
-  Ok(PathBuf::from(
-    fs::read_to_string(format!("{LAST_SESSION}-{username}"))?.trim(),
-  ))
-}
-
-pub fn get_last_user_command(username: &str) -> Result<String, io::Error> {
-  Ok(
-    fs::read_to_string(format!("{LAST_COMMAND}-{username}"))?
-      .trim()
-      .to_string(),
-  )
-}
-
-pub fn write_last_user_session<P>(username: &str, session: P)
-where
-  P: AsRef<Path>,
-{
-  let _ = fs::write(
-    format!("{LAST_SESSION}-{username}"),
-    session.as_ref().to_string_lossy().as_bytes(),
-  );
-}
-
-pub fn delete_last_session() {
-  let _ = fs::remove_file(LAST_SESSION);
-}
-
-pub fn write_last_user_command(username: &str, session: &str) {
-  let _ = fs::write(format!("{LAST_COMMAND}-{username}"), session);
-}
-
-pub fn delete_last_user_session(username: &str) {
-  let _ = fs::remove_file(format!("{LAST_SESSION}-{username}"));
-}
-
-pub fn delete_last_command() {
-  let _ = fs::remove_file(LAST_COMMAND);
-}
-
-pub fn delete_last_user_command(username: &str) {
-  let _ = fs::remove_file(format!("{LAST_COMMAND}-{username}"));
 }
 
 pub fn get_users(min_uid: u32, max_uid: u32) -> Vec<User> {

@@ -13,21 +13,10 @@ use tracing_appender::non_blocking::WorkerGuard;
 use zeroize::Zeroize;
 
 use crate::{
+  cache::{CacheState, CacheStore, RememberedSelection},
   config::{self, Settings},
   event::DEFAULT_REFRESH_RATE,
-  info::{
-    get_issue,
-    get_last_command,
-    get_last_session_path,
-    get_last_user_command,
-    get_last_user_name,
-    get_last_user_session,
-    get_last_user_username,
-    get_min_max_uids,
-    get_sessions,
-    get_users,
-    session_paths,
-  },
+  info::{get_issue, get_min_max_uids, get_sessions, get_users, session_paths},
   ipc::AuthState,
   power::PowerOption,
   text::Text,
@@ -287,6 +276,9 @@ pub struct Greeter {
   pub remember_session: bool,
   // Whether last launched session for the current user should be remembered.
   pub remember_user_session: bool,
+  // Last-known-good remembered state and the persistence target backing it.
+  pub(crate) cache_state: CacheState,
+  pub(crate) cache_store: CacheStore,
 
   // Style object for the terminal UI
   pub theme: Theme,
@@ -356,6 +348,8 @@ impl Default for Greeter {
       remember: false,
       remember_session: false,
       remember_user_session: false,
+      cache_state: CacheState::default(),
+      cache_store: CacheStore::disabled(),
       theme: Theme::default(),
       time: false,
       time_format: None,
@@ -410,8 +404,6 @@ pub(crate) struct ReloadApplied {
   pub warnings: Vec<String>,
   #[cfg_attr(test, allow(dead_code))]
   pub clear_command_cache: bool,
-  #[cfg_attr(test, allow(dead_code))]
-  pub cache_username: Option<String>,
 }
 
 impl ReloadPlan {
@@ -536,72 +528,69 @@ impl Greeter {
       selected: 0,
     };
 
-    // Free-form command caches created by older releases must not become active
-    // again if an administrator later enables command remembering.
     #[cfg(not(test))]
-    if !greeter.allow_command_editor {
-      crate::info::delete_last_command();
-    }
-
-    // If we should remember the last logged-in user.
-    if greeter.remember
-      && let Some(username) = get_last_user_username()
     {
-      greeter.username = MaskedString::from(username, get_last_user_name());
+      greeter.cache_store = CacheStore::for_runtime(greeter.mock);
+    }
 
-      #[cfg(not(test))]
-      if !greeter.allow_command_editor {
-        crate::info::delete_last_user_command(&greeter.username.value);
-      }
+    let store = greeter.cache_store.clone();
+    let cache_sessions = greeter.sessions.options.clone();
+    let allow_commands = greeter.allow_command_editor;
+    let cache_required = greeter.remember || greeter.remember_session || greeter.remember_user_session;
+    let cache = if store.is_enabled() {
+      tokio::task::spawn_blocking(move || store.load(&cache_sessions, allow_commands, cache_required))
+        .await
+        .unwrap_or_else(|error| crate::cache::CacheLoad {
+          state: CacheState::default(),
+          warnings: vec![format!("cache worker failed: {error}")],
+        })
+    } else {
+      crate::cache::CacheLoad::default()
+    };
+    for warning in cache.warnings {
+      eprintln!("tuigreet: warning: {warning}");
+      tracing::warn!("{warning}");
+    }
+    greeter.cache_state = cache.state;
 
-      // If, on top of that, we should remember their last session.
-      if greeter.remember_user_session {
-        // See if we have the last free-form command from the user.
-        if greeter.allow_command_editor
-          && let Ok(command) = get_last_user_command(&greeter.username.value)
-        {
-          greeter.session_source = SessionSource::Command(command);
-        }
+    if greeter.remember
+      && let Some(user) = greeter.cache_state.last_user().cloned()
+    {
+      greeter.username = MaskedString::from(user.username, user.display_name);
 
-        // If a session was saved, use it and its name.
-        if let Ok(ref session_path) = get_last_user_session(&greeter.username.value) {
-          // Set the selected menu option and the session source.
-          if let Some(index) = greeter
-            .sessions
-            .options
-            .iter()
-            .position(|Session { path, .. }| path.as_deref() == Some(session_path))
-          {
-            greeter.sessions.selected = index;
-            greeter.session_source = SessionSource::Session(greeter.sessions.selected);
-          }
-        }
+      if greeter.remember_user_session
+        && let Some(selection) = greeter.cache_state.user_selection(&greeter.username.value).cloned()
+      {
+        greeter.restore_cached_selection(&selection);
       }
     }
 
-    // Same thing, but not user specific.
-    if greeter.remember_session {
-      if greeter.allow_command_editor
-        && let Ok(command) = get_last_command()
-      {
-        greeter.session_source = SessionSource::Command(command.trim().to_string());
-      }
-
-      if let Ok(ref session_path) = get_last_session_path()
-        && let Some(index) = greeter
-          .sessions
-          .options
-          .iter()
-          .position(|Session { path, .. }| path.as_deref() == Some(session_path))
-      {
-        greeter.sessions.selected = index;
-        greeter.session_source = SessionSource::Session(greeter.sessions.selected);
-      }
+    if greeter.remember_session
+      && let Some(selection) = greeter.cache_state.global_selection().cloned()
+    {
+      greeter.restore_cached_selection(&selection);
     }
 
     greeter.normalize_derived_state();
 
     greeter
+  }
+
+  pub(crate) fn restore_cached_selection(&mut self, selection: &RememberedSelection) -> bool {
+    if let Some(command) = selection.command_value() {
+      if !self.allow_command_editor {
+        return false;
+      }
+      self.session_source = SessionSource::Command(command.to_string());
+      return true;
+    }
+
+    let Some(index) = selection.resolve(&self.sessions.options) else {
+      return false;
+    };
+    self.sessions.selected = index;
+    self.session_source = SessionSource::Session(index);
+    true
   }
 
   // Scrub memory of all data, unless `soft` is true, in which case, we will
@@ -1057,6 +1046,9 @@ impl Greeter {
     self.remember_session = settings.remember_session;
     self.remember_user_session = settings.remember_user_session;
     self.allow_command_editor = settings.allow_command_editor;
+    if command_editor_disabled {
+      self.cache_state.purge_commands();
+    }
     if !self.allow_command_editor && self.mode == Mode::Command {
       self.close_command_editor();
     }
@@ -1130,7 +1122,6 @@ impl Greeter {
       refresh_rate: self.refresh_rate,
       warnings,
       clear_command_cache: command_editor_disabled,
-      cache_username: (!self.username.value.is_empty()).then(|| self.username.value.clone()),
     }
   }
 

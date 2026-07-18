@@ -63,7 +63,7 @@
 # button = "white"
 
 [remember]
-# Pre-fill the last successfully authenticated username.
+# Pre-fill the username from the last successfully started session.
 # username = false
 # Restore the last successfully started session or manually entered command globally.
 # session = false

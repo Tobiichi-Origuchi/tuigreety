@@ -1299,6 +1299,8 @@ dependencies = [
  "greetd_ipc",
  "nix",
  "ratatui",
+ "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml_edit",

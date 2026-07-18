@@ -9,13 +9,12 @@ use crate::{
   Greeter,
   Mode,
   event::Control,
-  info::{get_last_user_command, get_last_user_session},
   ipc::Ipc,
   power::power,
   ui::{
     common::masked::MaskedString,
     input::{self, COMMAND_LIMIT, RESPONSE_LIMIT, USERNAME_LIMIT},
-    sessions::{Session, SessionSource},
+    sessions::SessionSource,
     users::User,
   },
 };
@@ -511,33 +510,11 @@ async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
   greeter.response_cursor = 0;
   greeter.input_warning = None;
 
-  #[cfg(not(test))]
-  if !greeter.allow_command_editor {
-    crate::info::delete_last_user_command(&greeter.username.value);
-  }
-
-  if greeter.remember_user_session {
-    if let Ok(last_session) = get_last_user_session(&greeter.username.value)
-      && let Some(last_session) = Session::from_path(greeter, last_session).cloned()
-    {
-      tracing::info!("remembered user session is {}", last_session.name);
-
-      greeter.sessions.selected = greeter
-        .sessions
-        .options
-        .iter()
-        .position(|sess| sess.path == last_session.path)
-        .unwrap_or(0);
-      greeter.session_source = SessionSource::Session(greeter.sessions.selected);
-    }
-
-    if greeter.allow_command_editor
-      && let Ok(command) = get_last_user_command(&greeter.username.value)
-    {
-      tracing::info!("restored a remembered user command");
-
-      greeter.session_source = SessionSource::Command(command);
-    }
+  if greeter.remember_user_session
+    && let Some(selection) = greeter.cache_state.user_selection(&greeter.username.value).cloned()
+    && greeter.restore_cached_selection(&selection)
+  {
+    tracing::info!("restored the remembered session for the selected user");
   }
 }
 

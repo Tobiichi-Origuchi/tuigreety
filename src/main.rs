@@ -1,6 +1,7 @@
 #[macro_use]
 mod macros;
 
+mod cache;
 mod config;
 mod desktop_entry;
 mod event;
@@ -151,14 +152,31 @@ where
                 1 => Some("Configuration reloaded with 1 warning".into()),
                 count => Some(format!("Configuration reloaded with {count} warnings")),
               };
+              let cache_store = applied.clear_command_cache.then(|| greeter_state.cache_store.clone());
               drop(greeter_state);
               report_reload_diagnostics("warning", &warnings);
-              #[cfg(not(test))]
-              if applied.clear_command_cache {
-                crate::info::delete_last_command();
-                if let Some(username) = &applied.cache_username {
-                  crate::info::delete_last_user_command(username);
+              let (cache_warnings, cache_failure) = if let Some(store) = cache_store.filter(|store| store.is_enabled()) {
+                match tokio::task::spawn_blocking(move || store.purge_commands()).await {
+                  Ok(Ok(commit)) => {
+                    greeter.write().await.cache_state = commit.state;
+                    (commit.warnings, None)
+                  },
+                  Ok(Err(error)) => (Vec::new(), Some(error.to_string())),
+                  Err(error) => (Vec::new(), Some(format!("cache worker failed: {error}"))),
                 }
+              } else {
+                (Vec::new(), None)
+              };
+              for warning in &cache_warnings {
+                report_cache_warning(warning);
+              }
+              if let Some(error) = cache_failure {
+                report_cache_failure(&error);
+                greeter.write().await.config_notice =
+                  Some("Configuration reloaded; remembered-state cleanup failed".into());
+              } else if !cache_warnings.is_empty() {
+                greeter.write().await.config_notice =
+                  Some("Configuration reloaded; damaged remembered state was repaired".into());
               }
               events.set_refresh_rate(applied.refresh_rate);
               ui::draw(greeter.clone(), &mut terminal, cursor_on)
@@ -264,6 +282,16 @@ fn report_reload_diagnostics(state: &str, diagnostics: &[String]) {
 fn report_reload_failure(message: &str) {
   eprintln!("tuigreet: error: {message}");
   tracing::error!("{message}");
+}
+
+fn report_cache_failure(message: &str) {
+  eprintln!("tuigreet: warning: failed to update remembered state: {message}");
+  tracing::warn!("failed to update remembered state: {message}");
+}
+
+fn report_cache_warning(message: &str) {
+  eprintln!("tuigreet: warning: {message}");
+  tracing::warn!("{message}");
 }
 
 fn exit(greeter: &mut Greeter, status: AuthStatus, ipc: &Ipc) {

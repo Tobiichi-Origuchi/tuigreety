@@ -3,7 +3,6 @@ use std::{
   env,
   error::Error,
   io,
-  path::PathBuf,
   sync::{
     Arc,
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -27,23 +26,10 @@ use crate::{
   AuthStatus,
   Greeter,
   Mode,
+  cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
   event::{Control, Event},
-  info::{
-    delete_last_command,
-    delete_last_session,
-    delete_last_user_command,
-    delete_last_user_session,
-    write_last_command,
-    write_last_session_path,
-    write_last_user_command,
-    write_last_user_session,
-    write_last_username,
-  },
   macros::SafeDebug,
-  ui::{
-    common::masked::MaskedString,
-    sessions::{Session, SessionSource, SessionType},
-  },
+  ui::sessions::{Session, SessionSource, SessionType},
 };
 
 const MAX_RECOVERY_ATTEMPTS: u8 = 3;
@@ -52,7 +38,7 @@ const CANCEL_WRITE_TIMEOUT: Duration = Duration::from_millis(500);
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum CachedSession {
   Command(String),
-  Session(PathBuf),
+  Desktop(RememberedSelection),
   None,
 }
 
@@ -133,8 +119,8 @@ impl PendingSession {
         .sessions
         .options
         .get(*index)
-        .and_then(|session| session.path.clone())
-        .map_or(CachedSession::None, CachedSession::Session),
+        .and_then(RememberedSelection::from_session)
+        .map_or(CachedSession::None, CachedSession::Desktop),
       _ => CachedSession::None,
     };
 
@@ -146,50 +132,29 @@ impl PendingSession {
   }
 }
 
-fn commit_pending_session(pending: PendingSession, policy: CachePolicy) {
-  if policy.remember_username {
-    write_last_username(&MaskedString::from(pending.username.clone(), pending.display_name));
-  }
-
-  let ignored_command = CachedSession::None;
-  let selection = match &pending.selection {
-    CachedSession::Command(_) if !policy.allow_command_editor => &ignored_command,
-    selection => selection,
+fn build_cache_update(pending: PendingSession, policy: CachePolicy) -> CacheUpdate {
+  let selection = match pending.selection {
+    CachedSession::Command(command) => Some(RememberedSelection::command(command)),
+    CachedSession::Desktop(selection) => Some(selection),
+    CachedSession::None => None,
   };
 
-  if policy.remember_session {
-    match selection {
-      CachedSession::Command(command) => {
-        write_last_command(command);
-        delete_last_session();
-      },
-      CachedSession::Session(path) => {
-        write_last_session_path(path);
-        delete_last_command();
-      },
-      CachedSession::None => {
-        delete_last_command();
-        delete_last_session();
-      },
-    }
-  }
+  CacheUpdate::successful_login(
+    RememberedUser {
+      username: pending.username,
+      display_name: pending.display_name,
+    },
+    selection,
+    policy.remember_username,
+    policy.remember_session,
+    policy.remember_user_session,
+    policy.allow_command_editor,
+  )
+}
 
-  if policy.remember_user_session {
-    match selection {
-      CachedSession::Command(command) => {
-        write_last_user_command(&pending.username, command);
-        delete_last_user_session(&pending.username);
-      },
-      CachedSession::Session(path) => {
-        write_last_user_session(&pending.username, path);
-        delete_last_user_command(&pending.username);
-      },
-      CachedSession::None => {
-        delete_last_user_command(&pending.username);
-        delete_last_user_session(&pending.username);
-      },
-    }
-  }
+struct ResponseOutcome {
+  control: Option<Control>,
+  cache_update: Option<CacheUpdate>,
 }
 
 #[derive(Clone)]
@@ -258,7 +223,13 @@ impl Ipc {
       .transact(&greeter, &mut stream, &queued.request, queued.generation, ipc_timeout)
       .await
       .map_err(transaction_error)?;
-    self.parse_response(&mut *greeter.write().await, response).await
+    let (outcome, cache_store) = {
+      let mut state = greeter.write().await;
+      let outcome = self.parse_response(&mut state, response).await?;
+      (outcome, state.cache_store.clone())
+    };
+    persist_cache(cache_store, outcome.cache_update).await;
+    Ok(outcome.control)
   }
 
   pub async fn run(&self, greeter: Arc<RwLock<Greeter>>, controls: UnboundedSender<Control>, renders: Sender<Event>) {
@@ -309,13 +280,21 @@ impl Ipc {
           // Reopen the transport before a fresh CreateSession so no daemon or
           // test implementation can retain stale per-connection PAM state.
           let session_cancelled = matches!(response, Response::Error { .. });
-          match self.parse_response(&mut *greeter.write().await, response).await {
-            Ok(control) => {
+          let parsed = {
+            let mut state = greeter.write().await;
+            self
+              .parse_response(&mut state, response)
+              .await
+              .map(|outcome| (outcome, state.cache_store.clone()))
+          };
+          match parsed {
+            Ok((outcome, cache_store)) => {
               if session_cancelled {
                 stream = None;
               }
+              persist_cache(cache_store, outcome.cache_update).await;
               request_render(&renders);
-              if let Some(control) = control
+              if let Some(control) = outcome.control
                 && controls.send(control).is_err()
               {
                 break;
@@ -537,10 +516,18 @@ impl Ipc {
     &self,
     greeter: &mut Greeter,
     response: Response,
-  ) -> Result<Option<Control>, Box<dyn Error + Send + Sync>> {
-    self
-      .parse_response_with(greeter, response, commit_pending_session)
-      .await
+  ) -> Result<ResponseOutcome, Box<dyn Error + Send + Sync>> {
+    let mut pending_cache = None;
+    let control = self
+      .parse_response_with(greeter, response, |pending, policy| {
+        pending_cache = Some(build_cache_update(pending, policy));
+      })
+      .await?;
+
+    Ok(ResponseOutcome {
+      control,
+      cache_update: pending_cache,
+    })
   }
 
   async fn parse_response_with<F>(
@@ -728,6 +715,29 @@ fn request_render(renders: &Sender<Event>) {
   let _ = renders.try_send(Event::Render);
 }
 
+async fn persist_cache(store: CacheStore, update: Option<CacheUpdate>) {
+  let Some(update) = update.filter(|_| store.is_enabled()) else {
+    return;
+  };
+
+  match tokio::task::spawn_blocking(move || store.commit(update)).await {
+    Ok(Ok(commit)) => {
+      for warning in commit.warnings {
+        eprintln!("tuigreet: warning: {warning}");
+        tracing::warn!("{warning}");
+      }
+    },
+    Ok(Err(error)) => {
+      eprintln!("tuigreet: warning: failed to persist remembered state: {error}");
+      tracing::warn!("failed to persist remembered state: {error}");
+    },
+    Err(error) => {
+      eprintln!("tuigreet: warning: cache worker failed: {error}");
+      tracing::warn!("cache worker failed: {error}");
+    },
+  }
+}
+
 #[cfg(test)]
 fn transaction_error(error: TransactionFailure) -> Box<dyn Error + Send + Sync> {
   io::Error::other(transaction_error_message(&error)).into()
@@ -835,9 +845,17 @@ fn wrap_session_command<'a>(
 
 #[cfg(test)]
 mod test {
-  use std::{path::PathBuf, sync::Arc, time::Duration};
+  use std::{
+    fs::{self, OpenOptions},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+  };
 
   use greetd_ipc::{AuthMessageType, ErrorType, Request, Response, codec::TokioCodec};
+  use nix::fcntl::{Flock, FlockArg};
+  use tempfile::tempdir;
   use tokio::sync::RwLock;
 
   use super::{
@@ -854,6 +872,7 @@ mod test {
   use crate::{
     Greeter,
     Mode,
+    cache::CacheStore,
     event::{Control, Events, fill_event_queue},
     ipc::{DefaultCommand, desktop_names_to_xdg},
     ui::{
@@ -1105,6 +1124,72 @@ mod test {
       .unwrap();
 
     assert!(matches!(control, Some(Control::Exit(crate::AuthStatus::Success))));
+  }
+
+  #[tokio::test]
+  async fn cache_contention_is_bounded_and_never_holds_the_greeter_lock() {
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let lock_file = OpenOptions::new()
+      .read(true)
+      .write(true)
+      .create(true)
+      .truncate(false)
+      .mode(0o600)
+      .open(directory.path().join(".state.lock"))
+      .unwrap();
+    let lock = Flock::lock(lock_file, FlockArg::LockExclusive).unwrap();
+    let store = CacheStore::at(directory.path());
+
+    let mut state = Greeter::default();
+    state.mock = true;
+    state.cache_store = store.clone();
+    state.auth_state = AuthState::StartingSession(
+      PendingSession {
+        username: "alice".into(),
+        display_name: Some("Alice".into()),
+        selection: CachedSession::None,
+      },
+      CachePolicy {
+        remember_username: true,
+        remember_session: false,
+        remember_user_session: false,
+        allow_command_editor: false,
+      },
+    );
+    let greeter = Arc::new(RwLock::new(state));
+    let ipc = Ipc::new();
+    ipc
+      .send(Request::StartSession {
+        cmd: vec!["true".into()],
+        env: Vec::new(),
+      })
+      .await;
+    let handle = tokio::spawn({
+      let ipc = ipc.clone();
+      let greeter = greeter.clone();
+      async move { ipc.handle(greeter).await }
+    });
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+      loop {
+        if greeter.read().await.auth_state == AuthState::Started {
+          break;
+        }
+        tokio::task::yield_now().await;
+      }
+    })
+    .await
+    .expect("cache I/O retained the Greeter write lock");
+
+    let control = tokio::time::timeout(Duration::from_secs(1), handle)
+      .await
+      .expect("cache contention blocked successful login")
+      .unwrap()
+      .unwrap();
+    assert!(matches!(control, Some(Control::Exit(crate::AuthStatus::Success))));
+    drop(lock.unlock().unwrap());
+    assert!(store.load(&[], false, true).state.last_user().is_none());
   }
 
   #[tokio::test]

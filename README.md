@@ -103,7 +103,7 @@ configured log cannot be opened safely, `tuigreet` prints a warning and
 continues without file logging. The log path is not accessed when debugging is
 disabled.
 
-You can instruct `tuigreet` to remember the last username that successfully opened a session with the `--remember` option (that way, the username field will be pre-filled). Similarly, the selected session can be retained between runs with the `--remember-session` option. You can also remember it per user with `--remember-user-session`. Username and session caches are updated only after greetd confirms that the selected session was started; authentication failures and cancellations do not change them. Check the [cache instructions](#cache-instructions) if `/var/cache/tuigreet` doesn't exist after installing tuigreet.
+You can instruct `tuigreet` to remember the last username that successfully opened a session with the `--remember` option (that way, the username field will be pre-filled). Similarly, the selected session can be retained between runs with `--remember-session`, globally or per user with `--remember-user-session`. Remembered values are committed as one versioned, atomic state file only after greetd confirms that the selected session started; authentication failures, cancellations, and `--mock` sessions do not change the system cache. Existing username and desktop-session caches are migrated on first use; legacy free-form command entries are deliberately discarded because their successful-session provenance cannot be verified. Check the [cache instructions](#cache-instructions) if `/var/cache/tuigreet` doesn't exist after installing tuigreet.
 
 By default, the session command can only come from administrator configuration or an installed session file. You can list those sessions with `F3`; power options are available through `F12`.
 
@@ -124,12 +124,12 @@ $ cargo build --release
 ```
 
 <a id="cache-instructions"></a>
-Cache directory must be created for `--remember*` features to work. The directory must be owned by the user running the greeter.
+The cache directory must be private and owned by the user running the greeter. Tuigreet refuses group- or world-writable cache paths and restricts safely owned paths and files to `0700` and `0600`, respectively. Distribution packages create it through tmpfiles; source installations can use:
 
 ```
 # mkdir /var/cache/tuigreet
 # chown greeter:greeter /var/cache/tuigreet
-# chmod 0755 /var/cache/tuigreet
+# chmod 0700 /var/cache/tuigreet
 ```
 
 ### From Arch Linux

@@ -124,6 +124,12 @@ tuigreet - A graphical console greeter for greetd
 	Remember the last session acknowledged as started by greetd, per user
 	(requires *--remember*).
 
+	Remembered values are stored atomically in a versioned state file under
+	*/var/cache/tuigreet*. The directory must be owned by the greeter user and
+	must not be group- or world-writable. Mock sessions never update this cache.
+	Legacy usernames and desktop sessions are migrated; legacy free-form commands
+	are discarded because their successful-session provenance cannot be verified.
+
 *--theme SPEC*
 	Define colors to be used to draw the UI components. You can find the proper
 	syntax in the project's README.
