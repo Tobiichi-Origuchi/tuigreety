@@ -6,9 +6,8 @@ use std::{
   ffi::{OsStr, OsString},
   fs::{self, File},
   io::{self, BufRead, BufReader},
-  os::unix::fs::PermissionsExt,
+  os::{fd::AsRawFd, unix::fs::PermissionsExt},
   path::{Path, PathBuf},
-  process::Command,
   sync::LazyLock,
 };
 
@@ -17,6 +16,8 @@ use freedesktop_desktop_entry::{DesktopEntry, Line, parse_line};
 use nix::sys::utsname;
 use utmp_rs::{UtmpEntry, UtmpParser};
 use uzers::os::unix::UserExt;
+
+nix::ioctl_read_bad!(get_keyboard_led_flags, 0x4B64, u8);
 
 use crate::{
   Greeter,
@@ -485,12 +486,30 @@ fn try_exec_exists(command: &str) -> bool {
 }
 
 pub fn capslock_status() -> bool {
-  let mut command = Command::new("kbdinfo");
-  command.args(["gkbled", "capslock"]);
+  let mut flags = 0;
+  // SAFETY: KDGKBLED writes exactly one byte to the supplied pointer. `flags`
+  // is live and writable for the duration of this synchronous ioctl call.
+  let result = unsafe { get_keyboard_led_flags(io::stdin().as_raw_fd(), &mut flags) };
 
-  match command.output() {
-    Ok(output) => output.status.code() == Some(0),
-    Err(_) => false,
+  result.is_ok() && capslock_is_on(flags)
+}
+
+fn capslock_is_on(flags: u8) -> bool {
+  const LED_CAP: u8 = 0x04;
+
+  flags & LED_CAP != 0
+}
+
+#[cfg(test)]
+mod capslock_tests {
+  use super::capslock_is_on;
+
+  #[test]
+  fn reads_the_current_capslock_bit_only() {
+    assert!(capslock_is_on(0x04));
+    assert!(capslock_is_on(0x07));
+    assert!(!capslock_is_on(0x00));
+    assert!(!capslock_is_on(0x40));
   }
 }
 

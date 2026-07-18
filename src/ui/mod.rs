@@ -49,10 +49,16 @@ where
   B: ratatui::backend::Backend,
   B::Error: 'static,
 {
+  // Backend size discovery can perform terminal I/O. Keep it outside the
+  // Greeter lock just like the buffer flush below.
+  terminal.autoresize()?;
+  let capslock = capslock_status();
+
   let greeter = greeter.read().await;
   let hide_cursor = should_hide_cursor(&greeter);
 
-  terminal.draw(|f| {
+  {
+    let mut f = terminal.get_frame();
     let theme = &greeter.theme;
 
     let size = f.area();
@@ -121,7 +127,7 @@ where
 
     f.render_widget(status_left, status_chunks[0]);
 
-    if capslock_status() {
+    if capslock {
       let status_right_text = status_label(theme, text!(greeter, status_caps));
       let status_right = Paragraph::new(status_right_text).alignment(Alignment::Right);
 
@@ -129,16 +135,22 @@ where
     }
 
     let cursor = match greeter.mode {
-      Mode::Command => self::command::draw(&greeter, f, chunks[MAIN_INDEX]),
-      Mode::Sessions => greeter.sessions.draw(&greeter, f, chunks[MAIN_INDEX]),
-      Mode::Power => greeter.powers.draw(&greeter, f, chunks[MAIN_INDEX]),
-      Mode::Users => greeter.users.draw(&greeter, f, chunks[MAIN_INDEX]),
-      Mode::Processing => self::processing::draw(&greeter, f, chunks[MAIN_INDEX]),
-      _ => self::prompt::draw(&greeter, f, chunks[MAIN_INDEX]),
+      Mode::Command => self::command::draw(&greeter, &mut f, chunks[MAIN_INDEX]),
+      Mode::Sessions => greeter.sessions.draw(&greeter, &mut f, chunks[MAIN_INDEX]),
+      Mode::Power => greeter.powers.draw(&greeter, &mut f, chunks[MAIN_INDEX]),
+      Mode::Users => greeter.users.draw(&greeter, &mut f, chunks[MAIN_INDEX]),
+      Mode::Processing => self::processing::draw(&greeter, &mut f, chunks[MAIN_INDEX]),
+      _ => self::prompt::draw(&greeter, &mut f, chunks[MAIN_INDEX]),
     };
 
     draw_cursor(f.buffer_mut(), cursor, cursor_on && !hide_cursor);
-  })?;
+  }
+
+  // Rendering above only mutates Ratatui's in-memory buffer. Release the
+  // shared application state before diffing, writing, moving the hardware
+  // cursor, or flushing the terminal backend.
+  drop(greeter);
+  terminal.apply_buffer()?;
 
   Ok(())
 }
@@ -215,13 +227,89 @@ where
 
 #[cfg(test)]
 mod tests {
-  use std::sync::Arc;
+  use std::{convert::Infallible, sync::Arc};
 
-  use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+  use ratatui::{
+    Terminal,
+    backend::{Backend, ClearType, TestBackend, WindowSize},
+    buffer::Cell,
+    layout::{Position, Rect, Size},
+  };
   use tokio::sync::RwLock;
 
   use super::*;
   use crate::ui::{power::Power, sessions::Session, users::User};
+
+  struct LockCheckingBackend {
+    inner: TestBackend,
+    greeter: Arc<RwLock<Greeter>>,
+  }
+
+  impl LockCheckingBackend {
+    fn assert_unlocked(&self) {
+      assert!(
+        self.greeter.try_write().is_ok(),
+        "terminal backend was accessed while the Greeter lock was held"
+      );
+    }
+  }
+
+  impl Backend for LockCheckingBackend {
+    type Error = Infallible;
+
+    fn draw<'a, I>(&mut self, content: I) -> Result<(), Self::Error>
+    where
+      I: Iterator<Item = (u16, u16, &'a Cell)>,
+    {
+      self.assert_unlocked();
+      self.inner.draw(content)
+    }
+
+    fn hide_cursor(&mut self) -> Result<(), Self::Error> {
+      self.assert_unlocked();
+      self.inner.hide_cursor()
+    }
+
+    fn show_cursor(&mut self) -> Result<(), Self::Error> {
+      self.assert_unlocked();
+      self.inner.show_cursor()
+    }
+
+    fn get_cursor_position(&mut self) -> Result<Position, Self::Error> {
+      self.assert_unlocked();
+      self.inner.get_cursor_position()
+    }
+
+    fn set_cursor_position<P: Into<Position>>(&mut self, position: P) -> Result<(), Self::Error> {
+      self.assert_unlocked();
+      self.inner.set_cursor_position(position)
+    }
+
+    fn clear(&mut self) -> Result<(), Self::Error> {
+      self.assert_unlocked();
+      self.inner.clear()
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> Result<(), Self::Error> {
+      self.assert_unlocked();
+      self.inner.clear_region(clear_type)
+    }
+
+    fn size(&self) -> Result<Size, Self::Error> {
+      self.assert_unlocked();
+      self.inner.size()
+    }
+
+    fn window_size(&mut self) -> Result<WindowSize, Self::Error> {
+      self.assert_unlocked();
+      self.inner.window_size()
+    }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+      self.assert_unlocked();
+      self.inner.flush()
+    }
+  }
 
   #[test]
   fn software_cursor_draws_blank_and_text_cells() {
@@ -304,5 +392,17 @@ mod tests {
         }
       }
     }
+  }
+
+  #[tokio::test]
+  async fn terminal_io_never_holds_the_greeter_lock() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let backend = LockCheckingBackend {
+      inner: TestBackend::new(80, 24),
+      greeter: greeter.clone(),
+    };
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    draw(greeter, &mut terminal, true).await.unwrap();
   }
 }

@@ -21,7 +21,7 @@ freedesktop-desktop-entry = { version = "0.8.1", default-features = false }
 futures-util = { version = "0.3.32", default-features = false, features = [ "async-await", "std" ] }
 getopts = "0.2.24"
 greetd_ipc = { version = "0.10.3", features = [ "tokio-codec" ] }
-nix = { version = "0.31.3", features = [ "feature" ] }
+nix = { version = "0.31.3", features = [ "feature", "ioctl" ] }
 ratatui = { version = "0.30.2", default-features = false, features = [
   "crossterm_0_29",
   "layout-cache",
