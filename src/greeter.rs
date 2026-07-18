@@ -1257,7 +1257,7 @@ fn build_power_options(text: &Text, settings: &Settings) -> Vec<Power> {
   .map(|(action, label, command)| Power {
     action,
     label,
-    command: command.or_else(|| crate::power::default_command(action)),
+    command: command.resolve(action),
   })
   .collect()
 }
@@ -2178,8 +2178,12 @@ mod test {
         &["--power-suspend", "do-suspend", "--power-hibernate", "do-hibernate"],
         true,
         Some(|greeter| {
-          assert_eq!(greeter.powers.options[2].command.as_deref(), Some("do-suspend"));
-          assert_eq!(greeter.powers.options[3].command.as_deref(), Some("do-hibernate"));
+          assert_eq!(greeter.powers.options[2].command.as_ref().unwrap().argv(), [
+            "do-suspend"
+          ]);
+          assert_eq!(greeter.powers.options[3].command.as_ref().unwrap().argv(), [
+            "do-hibernate"
+          ]);
         }),
       ),
       (

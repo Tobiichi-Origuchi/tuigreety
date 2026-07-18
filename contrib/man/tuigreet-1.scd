@@ -171,6 +171,10 @@ tuigreet - A graphical console greeter for greetd
 	Customize the command run when instructed to hibernate the machine. By default,
 	this uses *systemctl* with systemd and *loginctl* with elogind.
 
+	Each power option takes one shell-quoted string. It is parsed into a program
+	and literal arguments, then executed directly without a shell. Shell expansion,
+	pipelines, redirection, and environment assignments are not interpreted.
+
 *--power-no-setsid*
 	Do not prefix power commands with *setsid*, which is used to detach it from
 	current TTY.
@@ -193,6 +197,12 @@ All fields are optional. Unknown or invalid fields are warned about and ignored
 individually; an invalid TOML document is ignored as a whole. Configuration and
 command-line mistakes do not prevent tuigreet from starting. See the example
 *contrib/tuigreet.toml* distributed with the source for the complete schema.
+
+Power commands use exact argv arrays in TOML, with the program first and one
+item per argument. An omitted field uses the automatically detected default;
+*false* disables the action. Legacy command strings remain accepted and use the
+same shell-quoting parser as the command-line options, but are never run through
+a shell.
 
 Duplicate keys and duplicate table declarations are invalid TOML. A file with
 duplicates is rejected as a whole rather than applying an arbitrary occurrence.

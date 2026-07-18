@@ -4,7 +4,66 @@ use tokio::{process::Command, sync::RwLock};
 
 use crate::{AuthStatus, Greeter, Mode, event::Control, ui::power::Power};
 
-#[derive(Default, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandLine {
+  argv: Vec<String>,
+}
+
+impl CommandLine {
+  pub fn from_argv(argv: Vec<String>) -> Result<Self, &'static str> {
+    if argv.first().is_none_or(String::is_empty) {
+      Err("the command must contain a non-empty program")
+    } else if argv.iter().any(|argument| argument.contains('\0')) {
+      Err("the command must not contain NUL bytes")
+    } else {
+      Ok(Self { argv })
+    }
+  }
+
+  pub fn parse(value: &str) -> Result<Self, &'static str> {
+    let argv = shlex::split(value).ok_or("the command contains an unmatched quote or trailing escape")?;
+    Self::from_argv(argv)
+  }
+
+  fn direct(program: &str, arguments: &[&str]) -> Self {
+    let mut argv = Vec::with_capacity(arguments.len() + 1);
+    argv.push(program.to_string());
+    argv.extend(arguments.iter().map(|value| (*value).to_string()));
+    Self { argv }
+  }
+
+  pub fn program(&self) -> &str {
+    &self.argv[0]
+  }
+
+  pub fn arguments(&self) -> &[String] {
+    &self.argv[1..]
+  }
+
+  pub fn argv(&self) -> &[String] {
+    &self.argv
+  }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum PowerCommand {
+  #[default]
+  Auto,
+  Disabled,
+  Explicit(CommandLine),
+}
+
+impl PowerCommand {
+  pub fn resolve(&self, option: PowerOption) -> Option<CommandLine> {
+    match self {
+      Self::Auto => default_command(option),
+      Self::Disabled => None,
+      Self::Explicit(command) => Some(command.clone()),
+    }
+  }
+}
+
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PowerOption {
   #[default]
   Shutdown,
@@ -37,14 +96,14 @@ fn login_manager(root: &Path) -> Option<LoginManager> {
   None
 }
 
-pub fn default_command(option: PowerOption) -> Option<String> {
+pub fn default_command(option: PowerOption) -> Option<CommandLine> {
   default_command_for(option, Path::new("/"))
 }
 
-fn default_command_for(option: PowerOption, root: &Path) -> Option<String> {
+fn default_command_for(option: PowerOption, root: &Path) -> Option<CommandLine> {
   match option {
-    PowerOption::Shutdown => Some("shutdown -h now".to_string()),
-    PowerOption::Reboot => Some("shutdown -r now".to_string()),
+    PowerOption::Shutdown => Some(CommandLine::direct("shutdown", &["-h", "now"])),
+    PowerOption::Reboot => Some(CommandLine::direct("shutdown", &["-r", "now"])),
     PowerOption::Suspend | PowerOption::Hibernate => {
       let action = match option {
         PowerOption::Suspend => "suspend",
@@ -53,8 +112,8 @@ fn default_command_for(option: PowerOption, root: &Path) -> Option<String> {
       };
 
       match login_manager(root) {
-        Some(LoginManager::Systemd) => Some(format!("systemctl {action}")),
-        Some(LoginManager::Elogind) => Some(format!("loginctl {action}")),
+        Some(LoginManager::Systemd) => Some(CommandLine::direct("systemctl", &[action])),
+        Some(LoginManager::Elogind) => Some(CommandLine::direct("loginctl", &[action])),
         None => None,
       }
     },
@@ -75,15 +134,13 @@ pub fn power(greeter: &mut Greeter, option: PowerOption) -> Option<Control> {
       let command = match greeter.power_setsid {
         true => {
           let mut command = Command::new("setsid");
-          command.args(args.split(' '));
+          command.args(args.argv());
           command
         },
 
         false => {
-          let mut args = args.split(' ');
-
-          let mut command = Command::new(args.next().unwrap_or_default());
-          command.args(args);
+          let mut command = Command::new(args.program());
+          command.args(args.arguments());
           command
         },
       };
@@ -173,12 +230,12 @@ mod tests {
 
     assert_eq!(login_manager(root.path()), Some(LoginManager::Elogind));
     assert_eq!(
-      default_command_for(PowerOption::Suspend, root.path()).as_deref(),
-      Some("loginctl suspend")
+      default_command_for(PowerOption::Suspend, root.path()).unwrap().argv(),
+      ["loginctl", "suspend"]
     );
     assert_eq!(
-      default_command_for(PowerOption::Hibernate, root.path()).as_deref(),
-      Some("loginctl hibernate")
+      default_command_for(PowerOption::Hibernate, root.path()).unwrap().argv(),
+      ["loginctl", "hibernate"]
     );
   }
 
@@ -189,12 +246,12 @@ mod tests {
 
     assert_eq!(login_manager(root.path()), Some(LoginManager::Systemd));
     assert_eq!(
-      default_command_for(PowerOption::Suspend, root.path()).as_deref(),
-      Some("systemctl suspend")
+      default_command_for(PowerOption::Suspend, root.path()).unwrap().argv(),
+      ["systemctl", "suspend"]
     );
     assert_eq!(
-      default_command_for(PowerOption::Hibernate, root.path()).as_deref(),
-      Some("systemctl hibernate")
+      default_command_for(PowerOption::Hibernate, root.path()).unwrap().argv(),
+      ["systemctl", "hibernate"]
     );
   }
 
@@ -214,6 +271,30 @@ mod tests {
     File::create(root.path().join("run/elogind.pid")).unwrap();
 
     assert_eq!(login_manager(root.path()), None);
+  }
+
+  #[test]
+  fn parses_shell_quoted_text_into_literal_arguments() {
+    let command = CommandLine::parse("program 'two words' \"\" '$HOME' '|' ").unwrap();
+
+    assert_eq!(command.argv(), ["program", "two words", "", "$HOME", "|"]);
+    assert!(CommandLine::parse("").is_err());
+    assert!(CommandLine::parse("program 'unterminated").is_err());
+    assert!(CommandLine::parse("program \0").is_err());
+  }
+
+  #[test]
+  fn power_command_semantics_distinguish_auto_disabled_and_explicit() {
+    assert_eq!(PowerCommand::Auto.resolve(PowerOption::Shutdown).unwrap().argv(), [
+      "shutdown", "-h", "now"
+    ]);
+    assert_eq!(PowerCommand::Disabled.resolve(PowerOption::Shutdown), None);
+
+    let explicit = CommandLine::from_argv(vec!["custom".into(), "two words".into()]).unwrap();
+    assert_eq!(
+      PowerCommand::Explicit(explicit.clone()).resolve(PowerOption::Shutdown),
+      Some(explicit)
+    );
   }
 
   #[tokio::test]
@@ -242,7 +323,14 @@ mod tests {
     greeter.powers.options.push(Power {
       action: PowerOption::Shutdown,
       label: "Shutdown".into(),
-      command: Some("shutdown -h now".into()),
+      command: Some(
+        CommandLine::from_argv(
+          ["shutdown", "two words", "$HOME", "|", "touch"]
+            .map(str::to_string)
+            .to_vec(),
+        )
+        .unwrap(),
+      ),
     });
 
     let control = tokio::time::timeout(Duration::from_millis(100), async {
@@ -256,8 +344,30 @@ mod tests {
     };
     assert_eq!(command.as_std().get_program(), OsStr::new("shutdown"));
     assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), [
-      OsStr::new("-h"),
-      OsStr::new("now")
+      OsStr::new("two words"),
+      OsStr::new("$HOME"),
+      OsStr::new("|"),
+      OsStr::new("touch")
+    ]);
+  }
+
+  #[test]
+  fn setsid_receives_the_program_and_arguments_without_reparsing() {
+    let mut greeter = Greeter::default();
+    greeter.power_setsid = true;
+    greeter.powers.options.push(Power {
+      action: PowerOption::Shutdown,
+      label: "Shutdown".into(),
+      command: Some(CommandLine::from_argv(vec!["program".into(), "two words".into()]).unwrap()),
+    });
+
+    let Some(Control::PowerCommand(command)) = power(&mut greeter, PowerOption::Shutdown) else {
+      panic!("power selection did not return its command to the main loop");
+    };
+    assert_eq!(command.as_std().get_program(), OsStr::new("setsid"));
+    assert_eq!(command.as_std().get_args().collect::<Vec<_>>(), [
+      OsStr::new("program"),
+      OsStr::new("two words")
     ]);
   }
 }

@@ -97,12 +97,16 @@
 
 [power]
 # Commands available before authentication. Treat custom values as privileged.
-# shutdown = "shutdown -h now"
-# reboot = "shutdown -r now"
+# Each command is an exact argv array: program first, then one item per argument.
+# Shell expansion, pipelines, and redirection are never performed.
+# shutdown = ["shutdown", "-h", "now"]
+# reboot = ["shutdown", "-r", "now"]
 # Suspend command (example); automatically detected for systemd or elogind.
-# suspend = "systemctl suspend"
+# suspend = ["systemctl", "suspend"]
 # Hibernate command (example); automatically detected for systemd or elogind.
-# hibernate = "systemctl hibernate"
+# hibernate = ["systemctl", "hibernate"]
+# Set an action to false to disable it, including its automatically detected default.
+# Legacy command strings remain accepted and are parsed into argv for compatibility.
 # Detach power commands from the current TTY with setsid.
 # setsid = true
 

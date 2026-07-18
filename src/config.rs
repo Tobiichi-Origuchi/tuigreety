@@ -11,7 +11,10 @@ use getopts::Matches;
 use ratatui::style::Color;
 use toml_edit::{Document, Item, Table};
 
-use crate::event::{DEFAULT_REFRESH_RATE, MAX_REFRESH_RATE};
+use crate::{
+  event::{DEFAULT_REFRESH_RATE, MAX_REFRESH_RATE},
+  power::{CommandLine, PowerCommand},
+};
 
 pub const SYSTEM_CONFIG: &str = "/etc/tuigreet/config.toml";
 pub const DEFAULT_IPC_TIMEOUT: u16 = 120;
@@ -51,10 +54,10 @@ pub struct Settings {
   pub container_padding: u16,
   pub prompt_padding: u16,
   pub greet_align: String,
-  pub power_shutdown: Option<String>,
-  pub power_reboot: Option<String>,
-  pub power_suspend: Option<String>,
-  pub power_hibernate: Option<String>,
+  pub power_shutdown: PowerCommand,
+  pub power_reboot: PowerCommand,
+  pub power_suspend: PowerCommand,
+  pub power_hibernate: PowerCommand,
   pub power_setsid: bool,
   pub mock: bool,
   pub kb_command: u8,
@@ -95,10 +98,10 @@ impl Default for Settings {
       container_padding: 1,
       prompt_padding: 1,
       greet_align: "center".into(),
-      power_shutdown: None,
-      power_reboot: None,
-      power_suspend: None,
-      power_hibernate: None,
+      power_shutdown: PowerCommand::Auto,
+      power_reboot: PowerCommand::Auto,
+      power_suspend: PowerCommand::Auto,
+      power_hibernate: PowerCommand::Auto,
       power_setsid: true,
       mock: false,
       kb_command: 2,
@@ -140,10 +143,10 @@ struct Layer {
   container_padding: Option<u16>,
   prompt_padding: Option<u16>,
   greet_align: Option<String>,
-  power_shutdown: Option<Option<String>>,
-  power_reboot: Option<Option<String>>,
-  power_suspend: Option<Option<String>>,
-  power_hibernate: Option<Option<String>>,
+  power_shutdown: Option<PowerCommand>,
+  power_reboot: Option<PowerCommand>,
+  power_suspend: Option<PowerCommand>,
+  power_hibernate: Option<PowerCommand>,
   power_setsid: Option<bool>,
   mock: Option<bool>,
   kb_command: Option<u8>,
@@ -513,10 +516,10 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
       ));
     }
   }
-  layer.power_shutdown = string("power-shutdown").map(Some);
-  layer.power_reboot = string("power-reboot").map(Some);
-  layer.power_suspend = string("power-suspend").map(Some);
-  layer.power_hibernate = string("power-hibernate").map(Some);
+  layer.power_shutdown = cli_power_command(matches, "power-shutdown", warnings);
+  layer.power_reboot = cli_power_command(matches, "power-reboot", warnings);
+  layer.power_suspend = cli_power_command(matches, "power-suspend", warnings);
+  layer.power_hibernate = cli_power_command(matches, "power-hibernate", warnings);
   if matches.opt_present("power-no-setsid") {
     layer.power_setsid = Some(false);
   }
@@ -525,6 +528,17 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.kb_sessions = cli_number(matches, "kb-sessions", 1, 12, warnings);
   layer.kb_power = cli_number(matches, "kb-power", 1, 12, warnings);
   layer
+}
+
+fn cli_power_command(matches: &Matches, name: &str, warnings: &mut Vec<String>) -> Option<PowerCommand> {
+  let value = matches.opt_str(name)?;
+  match CommandLine::parse(&value) {
+    Ok(command) => Some(PowerCommand::Explicit(command)),
+    Err(error) => {
+      warnings.push(format!("command line: invalid --{name} value: {error}; ignoring it"));
+      None
+    },
+  }
 }
 
 fn cli_number<T>(matches: &Matches, name: &str, min: T, max: T, warnings: &mut Vec<String>) -> Option<T>
@@ -710,10 +724,10 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   if let Some(table) = read_table(document.as_table(), "power", path, source, warnings) {
     const KEYS: &[&str] = &["shutdown", "reboot", "suspend", "hibernate", "setsid"];
     warn_unknown(table, KEYS, path, source, warnings, "power");
-    layer.power_shutdown = read_optional_string(table, "shutdown", path, source, warnings, "power");
-    layer.power_reboot = read_optional_string(table, "reboot", path, source, warnings, "power");
-    layer.power_suspend = read_optional_string(table, "suspend", path, source, warnings, "power");
-    layer.power_hibernate = read_optional_string(table, "hibernate", path, source, warnings, "power");
+    layer.power_shutdown = read_power_command(table, "shutdown", path, source, warnings);
+    layer.power_reboot = read_power_command(table, "reboot", path, source, warnings);
+    layer.power_suspend = read_power_command(table, "suspend", path, source, warnings);
+    layer.power_hibernate = read_power_command(table, "hibernate", path, source, warnings);
     layer.power_setsid = read_bool(table, "setsid", path, source, warnings, "power");
   }
   if let Some(table) = read_table(document.as_table(), "keybindings", path, source, warnings) {
@@ -832,6 +846,64 @@ fn read_optional_string(
 ) -> Option<Option<String>> {
   let value = read_string(table, key, path, source, warnings, prefix)?;
   Some((!value.is_empty()).then_some(value))
+}
+
+fn read_power_command(
+  table: &Table,
+  key: &str,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<String>,
+) -> Option<PowerCommand> {
+  let item = table.get(key)?;
+  if item.as_bool() == Some(false) {
+    return Some(PowerCommand::Disabled);
+  }
+
+  let parsed = if let Some(array) = item.as_array() {
+    let argv = array
+      .iter()
+      .map(|value| value.as_str().map(str::to_string))
+      .collect::<Option<Vec<_>>>();
+    match argv {
+      Some(argv) => CommandLine::from_argv(argv),
+      None => {
+        warn_item(
+          Some(item),
+          path,
+          source,
+          warnings,
+          &format!("power.{key} must contain only strings"),
+        );
+        return None;
+      },
+    }
+  } else if let Some(value) = item.as_str() {
+    CommandLine::parse(value)
+  } else {
+    warn_item(
+      Some(item),
+      path,
+      source,
+      warnings,
+      &format!("power.{key} must be an argument array, a legacy command string, or false"),
+    );
+    return None;
+  };
+
+  match parsed {
+    Ok(command) => Some(PowerCommand::Explicit(command)),
+    Err(error) => {
+      warn_item(
+        Some(item),
+        path,
+        source,
+        warnings,
+        &format!("power.{key} is invalid: {error}; ignoring it"),
+      );
+      None
+    },
+  }
 }
 
 fn read_string_or_false(
@@ -1104,7 +1176,7 @@ mod tests {
   use tempfile::tempdir;
 
   use super::{load_paths, reload_paths};
-  use crate::Greeter;
+  use crate::{Greeter, power::PowerCommand};
 
   fn matches(args: &[&str]) -> getopts::Matches {
     Greeter::options().parse(args).unwrap()
@@ -1221,6 +1293,107 @@ mod tests {
     assert!(settings.remember_user_session);
     assert!(warnings.iter().any(|warning| warning.contains("min-uid exceeds")));
     assert!(warnings.iter().any(|warning| warning.contains("duplicate keybinding")));
+  }
+
+  #[test]
+  fn power_commands_support_argv_legacy_strings_and_explicit_disable() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write(
+      &config,
+      "[power]\nshutdown = ['sudo', 'systemctl', 'poweroff', 'two words', '']\nreboot = \"command 'quoted argument' '$HOME' '|'\"\nsuspend = false\nhibernate = ['hibernate-now']\n",
+    );
+
+    let (settings, warnings) = load_paths(Some(&config), None, &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let PowerCommand::Explicit(shutdown) = settings.power_shutdown else {
+      panic!("argv power command was not applied");
+    };
+    assert_eq!(shutdown.argv(), ["sudo", "systemctl", "poweroff", "two words", ""]);
+    let PowerCommand::Explicit(reboot) = settings.power_reboot else {
+      panic!("legacy power command was not applied");
+    };
+    assert_eq!(reboot.argv(), ["command", "quoted argument", "$HOME", "|"]);
+    assert_eq!(settings.power_suspend, PowerCommand::Disabled);
+    let PowerCommand::Explicit(hibernate) = settings.power_hibernate else {
+      panic!("single-argument power command was not applied");
+    };
+    assert_eq!(hibernate.argv(), ["hibernate-now"]);
+  }
+
+  #[test]
+  fn invalid_power_values_warn_and_preserve_the_previous_layer() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(
+      &system,
+      "[power]\nshutdown = ['system-shutdown']\nreboot = ['system-reboot']\nsuspend = ['system-suspend']\nhibernate = ['system-hibernate']\n",
+    );
+    write(
+      &explicit,
+      "[power]\nshutdown = []\nreboot = ['explicit-reboot', 1]\nsuspend = \"unterminated '\"\nhibernate = true\n",
+    );
+
+    let (settings, warnings) = load_paths(
+      Some(&system),
+      Some(&explicit),
+      &matches(&["--power-shutdown", "cli-command '"]),
+    );
+
+    for (command, expected) in [
+      (&settings.power_shutdown, "system-shutdown"),
+      (&settings.power_reboot, "system-reboot"),
+      (&settings.power_suspend, "system-suspend"),
+      (&settings.power_hibernate, "system-hibernate"),
+    ] {
+      let PowerCommand::Explicit(command) = command else {
+        panic!("invalid higher layer replaced a valid lower layer");
+      };
+      assert_eq!(command.argv(), [expected]);
+    }
+    assert_eq!(warnings.len(), 5, "{warnings:?}");
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("power.shutdown is invalid"))
+    );
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("power.reboot must contain only strings"))
+    );
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("power.suspend is invalid"))
+    );
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("power.hibernate must be an argument array"))
+    );
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("command line: invalid --power-shutdown"))
+    );
+  }
+
+  #[test]
+  fn command_line_power_values_use_the_legacy_string_parser() {
+    let (settings, warnings) = load_paths(
+      None,
+      None,
+      &matches(&["--power-reboot", "program 'two words' '$HOME' '|' ''"]),
+    );
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    let PowerCommand::Explicit(command) = settings.power_reboot else {
+      panic!("command-line power command was not applied");
+    };
+    assert_eq!(command.argv(), ["program", "two words", "$HOME", "|", ""]);
   }
 
   #[test]
