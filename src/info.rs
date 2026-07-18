@@ -20,7 +20,6 @@ use uzers::os::unix::UserExt;
 nix::ioctl_read_bad!(get_keyboard_led_flags, 0x4B64, u8);
 
 use crate::{
-  Greeter,
   desktop_entry::{parse_exec, shell_join},
   ui::{
     common::masked::MaskedString,
@@ -295,17 +294,41 @@ pub fn get_min_max_uids(min_uid: Option<u32>, max_uid: Option<u32>) -> (u32, u32
   }
 }
 
-pub fn get_sessions(greeter: &Greeter) -> Result<Vec<Session>, Box<dyn Error>> {
-  let paths = if greeter.session_paths.is_empty() {
-    DEFAULT_SESSION_PATHS.as_ref()
-  } else {
-    &greeter.session_paths
-  };
+pub fn session_paths(sessions: &[String], xsessions: &[String]) -> Vec<(PathBuf, SessionType)> {
+  effective_session_paths(sessions, xsessions, &DEFAULT_SESSION_PATHS)
+}
 
+fn effective_session_paths(
+  sessions: &[String],
+  xsessions: &[String],
+  defaults: &[(PathBuf, SessionType)],
+) -> Vec<(PathBuf, SessionType)> {
+  let configured = [(sessions, SessionType::Wayland), (xsessions, SessionType::X11)];
+  let mut paths = Vec::new();
+
+  for (configured, session_type) in configured {
+    if configured.is_empty() {
+      paths.extend(
+        defaults
+          .iter()
+          .filter(|(_, default_type)| *default_type == session_type)
+          .cloned(),
+      );
+    } else {
+      paths.extend(configured.iter().map(|path| (PathBuf::from(path), session_type)));
+    }
+  }
+
+  let mut seen = HashSet::new();
+  paths.retain(|path| seen.insert(path.clone()));
+  paths
+}
+
+pub fn get_sessions(paths: &[(PathBuf, SessionType)]) -> Result<Vec<Session>, Box<dyn Error>> {
   let mut files = Vec::new();
   let mut seen = HashSet::<(SessionType, OsString)>::new();
 
-  for (path, session_type) in paths.iter() {
+  for (path, session_type) in paths {
     tracing::info!("reading {:?} sessions from '{}'", session_type, path.display());
 
     let mut entries = match fs::read_dir(path) {
@@ -523,8 +546,8 @@ mod session_tests {
 
   use tempfile::tempdir;
 
-  use super::{get_sessions, load_desktop_file};
-  use crate::{Greeter, ui::sessions::SessionType};
+  use super::{effective_session_paths, get_sessions, load_desktop_file};
+  use crate::ui::sessions::SessionType;
 
   fn write_desktop(directory: &Path, name: &str, contents: &str) -> PathBuf {
     let path = directory.join(name);
@@ -638,19 +661,36 @@ mod session_tests {
     write_desktop(low.path(), "not-a-session.ini", &visible_session("Ignored", ""));
     fs::create_dir(low.path().join("directory.desktop")).unwrap();
 
-    let mut greeter = Greeter::default();
-    greeter.session_paths = vec![
+    let paths = vec![
       (high.path().into(), SessionType::Wayland),
       (low.path().into(), SessionType::Wayland),
     ];
 
-    let sessions = get_sessions(&greeter).unwrap();
+    let sessions = get_sessions(&paths).unwrap();
     let slugs = sessions
       .iter()
       .map(|session| session.slug.as_deref().unwrap())
       .collect::<Vec<_>>();
 
     assert_eq!(slugs, ["a", "z"]);
+  }
+
+  #[test]
+  fn each_session_type_falls_back_independently() {
+    let defaults = vec![
+      (PathBuf::from("/default/wayland"), SessionType::Wayland),
+      (PathBuf::from("/default/x11"), SessionType::X11),
+    ];
+    let custom_wayland = vec!["/custom/wayland".to_string()];
+
+    assert_eq!(effective_session_paths(&custom_wayland, &[], &defaults), [
+      (PathBuf::from("/custom/wayland"), SessionType::Wayland),
+      (PathBuf::from("/default/x11"), SessionType::X11),
+    ]);
+    assert_eq!(effective_session_paths(&[], &["/custom/x11".to_string()], &defaults), [
+      (PathBuf::from("/default/wayland"), SessionType::Wayland),
+      (PathBuf::from("/custom/x11"), SessionType::X11),
+    ]);
   }
 }
 

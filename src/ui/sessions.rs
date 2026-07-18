@@ -21,6 +21,12 @@ pub enum SessionSource {
   Session(usize),
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum SessionId {
+  Desktop { path: PathBuf, session_type: SessionType },
+  Synthetic { slug: String, session_type: SessionType },
+}
+
 impl SessionSource {
   // Returns a human-readable label for the selected session.
   //
@@ -114,6 +120,20 @@ impl MenuItem for Session {
 }
 
 impl Session {
+  pub fn id(&self) -> Option<SessionId> {
+    if let Some(path) = &self.path {
+      Some(SessionId::Desktop {
+        path: path.clone(),
+        session_type: self.session_type,
+      })
+    } else {
+      self.slug.as_ref().map(|slug| SessionId::Synthetic {
+        slug: slug.clone(),
+        session_type: self.session_type,
+      })
+    }
+  }
+
   // Get a `Session` from the path of a session file.
   //
   // If the path maps to a valid session file, will return the associated

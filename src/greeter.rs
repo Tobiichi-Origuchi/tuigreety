@@ -25,6 +25,7 @@ use crate::{
     get_min_max_uids,
     get_sessions,
     get_users,
+    session_paths,
   },
   ipc::AuthState,
   power::PowerOption,
@@ -406,7 +407,10 @@ impl Greeter {
       },
     };
 
-    let mut sessions = get_sessions(&greeter).unwrap_or_default();
+    let paths = greeter.session_paths.clone();
+    let mut sessions = tokio::task::spawn_blocking(move || get_sessions(&paths).unwrap_or_default())
+      .await
+      .unwrap_or_default();
 
     if greeter.mock && sessions.is_empty() {
       sessions = mock_sessions();
@@ -819,13 +823,19 @@ impl Greeter {
     self.user_autocomplete = settings.user_autocomplete;
 
     if self.user_menu || self.user_autocomplete {
-      let (min_uid, max_uid) = get_min_max_uids(settings.min_uid, settings.max_uid);
-
-      tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
+      let min_uid = settings.min_uid;
+      let max_uid = settings.max_uid;
+      let users = tokio::task::spawn_blocking(move || {
+        let (min_uid, max_uid) = get_min_max_uids(min_uid, max_uid);
+        tracing::info!("min/max UIDs are {}/{}", min_uid, max_uid);
+        get_users(min_uid, max_uid)
+      })
+      .await
+      .unwrap_or_default();
 
       self.users = Menu {
         title: text!(self, title_users),
-        options: get_users(min_uid, max_uid),
+        options: users,
         selected: 0,
       };
 
@@ -844,16 +854,11 @@ impl Greeter {
       self.session_source = SessionSource::DefaultCommand(command, environment);
     }
 
-    for dir in &settings.sessions {
-      self.add_session_path(PathBuf::from(dir), SessionType::Wayland);
-    }
-    for dir in &settings.xsessions {
-      self.add_session_path(PathBuf::from(dir), SessionType::X11);
-    }
+    self.session_paths = session_paths(&settings.sessions, &settings.xsessions);
     self.session_wrapper = settings.session_wrapper.clone();
     self.xsession_wrapper = settings.xsession_wrapper.clone();
     if settings.issue {
-      self.greeting = get_issue();
+      self.greeting = tokio::task::spawn_blocking(get_issue).await.unwrap_or_default();
     }
 
     self.powers.options.push(Power {
@@ -972,7 +977,7 @@ impl Greeter {
     }
     self.session_wrapper.clone_from(&settings.session_wrapper);
     self.xsession_wrapper.clone_from(&settings.xsession_wrapper);
-    self.sessions.options = get_sessions(self).unwrap_or_default();
+    self.sessions.options = get_sessions(&self.session_paths).unwrap_or_default();
     self.sessions.selected = selected_path
       .as_deref()
       .and_then(|path| {
