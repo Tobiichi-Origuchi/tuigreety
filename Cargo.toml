@@ -55,4 +55,5 @@ strip = "symbols"
 
 [dev-dependencies]
 greetd-stub = "0.3.0"
+nix         = { version = "0.31.3", default-features = false, features = [ "signal", "term" ] }
 tempfile    = "3.27.0"
