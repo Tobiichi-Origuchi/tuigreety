@@ -456,7 +456,7 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
     layer.logfile = Some(path);
   }
   layer.ipc_timeout = cli_number(matches, "ipc-timeout", 1, MAX_IPC_TIMEOUT, warnings);
-  layer.command = string("cmd").map(Some);
+  layer.command = string("cmd").map(optional_command);
   if matches.opt_present("allow-command-editor") && matches.opt_present("no-command-editor") {
     warnings.push(
       "command line: --allow-command-editor conflicts with --no-command-editor; keeping the editor disabled".into(),
@@ -472,11 +472,11 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   }
   layer.sessions = string("sessions").map(|value| split_paths(&value));
   layer.xsessions = string("xsessions").map(|value| split_paths(&value));
-  layer.session_wrapper = string("session-wrapper").map(Some);
+  layer.session_wrapper = string("session-wrapper").map(optional_command);
   layer.xsession_wrapper = if matches.opt_present("no-xsession-wrapper") {
     Some(None)
   } else {
-    string("xsession-wrapper").map(Some)
+    string("xsession-wrapper").map(optional_command)
   };
   layer.width = cli_number(matches, "width", 1, u16::MAX, warnings);
   layer.issue = flag("issue");
@@ -605,13 +605,13 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
       "xsession-wrapper",
     ];
     warn_unknown(table, KEYS, path, source, warnings, "session");
-    layer.command = read_optional_string(table, "command", path, source, warnings, "session");
+    layer.command = read_optional_command(table, "command", path, source, warnings, "session");
     layer.allow_command_editor = read_bool(table, "allow-command-editor", path, source, warnings, "session");
     layer.environment = read_strings(table, "environment", path, source, warnings, "session")
       .map(|values| valid_environment(values, &path.display().to_string(), warnings));
     layer.sessions = read_strings(table, "sessions", path, source, warnings, "session");
     layer.xsessions = read_strings(table, "xsessions", path, source, warnings, "session");
-    layer.session_wrapper = read_optional_string(table, "wrapper", path, source, warnings, "session");
+    layer.session_wrapper = read_optional_command(table, "wrapper", path, source, warnings, "session");
     layer.xsession_wrapper = read_string_or_false(table, "xsession-wrapper", path, source, warnings, "session");
   }
   if let Some(table) = read_table(document.as_table(), "display", path, source, warnings) {
@@ -847,6 +847,22 @@ fn read_optional_string(
   Some((!value.is_empty()).then_some(value))
 }
 
+fn read_optional_command(
+  table: &Table,
+  key: &str,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<String>,
+  prefix: &str,
+) -> Option<Option<String>> {
+  let value = read_string(table, key, path, source, warnings, prefix)?;
+  Some(optional_command(value))
+}
+
+fn optional_command(value: String) -> Option<String> {
+  (!value.trim().is_empty()).then_some(value)
+}
+
 fn read_power_command(
   table: &Table,
   key: &str,
@@ -917,7 +933,7 @@ fn read_string_or_false(
   if item.as_bool() == Some(false) {
     Some(None)
   } else if let Some(value) = item.as_str() {
-    Some((!value.is_empty()).then(|| value.to_string()))
+    Some(optional_command(value.to_string()))
   } else {
     warn_item(
       Some(item),
@@ -1234,6 +1250,87 @@ mod tests {
     assert!(settings.time);
     assert_eq!(settings.window_padding, 0);
     assert_eq!(settings.width, 80);
+  }
+
+  #[test]
+  fn blank_session_commands_clear_lower_layers_without_changing_power_arguments() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(
+      &system,
+      "[session]\ncommand = 'system-command'\nwrapper = 'system-wrapper'\nxsession-wrapper = 'system-xwrapper'\n[power]\nshutdown = ['power-command', '']\n",
+    );
+    write(
+      &explicit,
+      "[session]\ncommand = '   '\nwrapper = \"\\t  \"\nxsession-wrapper = '  '\n",
+    );
+
+    let (from_toml, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_toml.command, None);
+    assert_eq!(from_toml.session_wrapper, None);
+    assert_eq!(from_toml.xsession_wrapper, None);
+    let PowerCommand::Explicit(command) = from_toml.power_shutdown else {
+      panic!("unrelated power command was not preserved");
+    };
+    assert_eq!(command.argv(), ["power-command", ""]);
+
+    write(
+      &explicit,
+      "[session]\ncommand = ''\nwrapper = ''\nxsession-wrapper = ''\n",
+    );
+    let (from_empty_toml, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_empty_toml.command, None);
+    assert_eq!(from_empty_toml.session_wrapper, None);
+    assert_eq!(from_empty_toml.xsession_wrapper, None);
+
+    let cli = matches(&["--cmd", "  ", "--session-wrapper", "\t", "--xsession-wrapper", " \n "]);
+    let (from_cli, warnings) = load_paths(Some(&system), None, &cli);
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_cli.command, None);
+    assert_eq!(from_cli.session_wrapper, None);
+    assert_eq!(from_cli.xsession_wrapper, None);
+    let PowerCommand::Explicit(command) = from_cli.power_shutdown else {
+      panic!("unrelated power command was not preserved");
+    };
+    assert_eq!(command.argv(), ["power-command", ""]);
+  }
+
+  #[test]
+  fn nonblank_session_commands_preserve_their_original_whitespace() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write(
+      &config,
+      "[session]\ncommand = '  toml-command --flag  '\nwrapper = '  toml-wrapper  '\nxsession-wrapper = '  toml-xwrapper  '\n",
+    );
+
+    let (from_toml, warnings) = load_paths(Some(&config), None, &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_toml.command.as_deref(), Some("  toml-command --flag  "));
+    assert_eq!(from_toml.session_wrapper.as_deref(), Some("  toml-wrapper  "));
+    assert_eq!(from_toml.xsession_wrapper.as_deref(), Some("  toml-xwrapper  "));
+
+    let cli = matches(&[
+      "--cmd",
+      "  cli-command --flag  ",
+      "--session-wrapper",
+      "  cli-wrapper  ",
+      "--xsession-wrapper",
+      "  cli-xwrapper  ",
+    ]);
+    let (from_cli, warnings) = load_paths(None, None, &cli);
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(from_cli.command.as_deref(), Some("  cli-command --flag  "));
+    assert_eq!(from_cli.session_wrapper.as_deref(), Some("  cli-wrapper  "));
+    assert_eq!(from_cli.xsession_wrapper.as_deref(), Some("  cli-xwrapper  "));
   }
 
   #[test]

@@ -619,21 +619,11 @@ impl Ipc {
 
         tracing::info!("authentication successful, starting session");
 
-        let command = if !greeter.allow_command_editor && matches!(&greeter.session_source, SessionSource::Command(_)) {
-          tracing::warn!("refusing a free-form session command because the command editor is disabled");
-          None
-        } else {
-          greeter.session_source.command(greeter).map(str::to_string)
-        };
+        let command = greeter.launch_command().map(str::to_string);
 
         match command {
           None => {
-            greeter.message = Some(text!(greeter, command_missing));
-            self.cancel(greeter);
-          },
-
-          Some(command) if command.trim().is_empty() => {
-            greeter.message = Some(text!(greeter, command_missing));
+            greeter.show_command_missing();
             self.cancel(greeter);
           },
 

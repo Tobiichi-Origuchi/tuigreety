@@ -257,10 +257,13 @@ pub async fn handle_with_power(
       },
 
       Mode::Command if greeter.allow_command_editor => {
-        greeter.sessions.selected = 0;
-        greeter.session_source = SessionSource::Command(greeter.command_buffer.clone());
-
-        greeter.close_command_editor();
+        if greeter.command_buffer.trim().is_empty() {
+          greeter.input_warning = Some(text!(greeter, command_missing));
+        } else {
+          greeter.sessions.selected = 0;
+          greeter.session_source = SessionSource::Command(greeter.command_buffer.clone());
+          greeter.close_command_editor();
+        }
       },
 
       Mode::Command => {
@@ -518,31 +521,25 @@ fn clear_input(greeter: &mut Greeter) {
 
 // Creates a `greetd` session for the provided username.
 async fn validate_username(greeter: &mut Greeter, ipc: &Ipc) {
-  greeter.auth_state = crate::ipc::AuthState::CreatingSession;
-  greeter.message = None;
-
-  ipc
-    .send(Request::CreateSession {
-      username: greeter.username.value.clone(),
-    })
-    .await;
-  greeter.buffer = String::new();
-  greeter.response_cursor = 0;
-  greeter.input_warning = None;
-
   if greeter.remember_user_session
     && let Some(selection) = greeter.cache_state.user_selection(&greeter.username.value).cloned()
     && greeter.restore_cached_selection(&selection)
   {
     tracing::info!("restored the remembered session for the selected user");
   }
+
+  if let Some(username) = greeter.begin_authentication() {
+    ipc.send(Request::CreateSession { username }).await;
+  }
 }
 
 #[cfg(test)]
 mod test {
-  use std::sync::Arc;
+  use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
 
   use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+  use greetd_ipc::Request;
+  use tempfile::tempdir;
   use tokio::{sync::RwLock, time::Duration};
 
   use super::{Completion, common_prefix, complete_username, delete, handle, handle_with_power, insert};
@@ -554,6 +551,7 @@ mod test {
   use crate::{
     Greeter,
     Mode,
+    cache::{CacheStore, CacheUpdate, RememberedSelection, RememberedUser},
     event::Control,
     ipc::Ipc,
     power::PowerOption,
@@ -1171,6 +1169,113 @@ mod test {
     assert_eq!(greeter.mode, Mode::Username);
     assert_eq!(greeter.buffer, "password");
     assert!(greeter.command_buffer.is_empty());
+  }
+
+  #[tokio::test]
+  async fn blank_command_remains_in_the_editor_without_replacing_the_source() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.allow_command_editor = true;
+      state.previous_mode = Mode::Username;
+      state.mode = Mode::Command;
+      state.session_source = SessionSource::DefaultCommand("safe-command".into(), None);
+      state.command_buffer = " \t ".into();
+    }
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      Ipc::new(),
+    )
+    .await
+    .unwrap();
+
+    let state = greeter.read().await;
+    assert_eq!(state.mode, Mode::Command);
+    assert_eq!(state.command_buffer, " \t ");
+    assert_eq!(state.input_warning.as_deref(), Some("No command configured"));
+    assert!(matches!(&state.session_source, SessionSource::DefaultCommand(command, None) if command == "safe-command"));
+  }
+
+  #[tokio::test]
+  async fn username_without_a_launch_source_does_not_start_authentication() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    greeter.write().await.username.value = "alice".into();
+    let ipc = Ipc::new();
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      ipc.clone(),
+    )
+    .await
+    .unwrap();
+
+    let state = greeter.read().await;
+    assert_eq!(state.auth_state, crate::ipc::AuthState::Idle);
+    assert_eq!(state.message.as_deref(), Some("No command configured"));
+    drop(state);
+    assert!(
+      tokio::time::timeout(Duration::from_millis(10), ipc.next())
+        .await
+        .is_err()
+    );
+  }
+
+  #[tokio::test]
+  async fn remembered_user_session_is_restored_before_launch_validation() {
+    let directory = tempdir().unwrap();
+    fs::set_permissions(directory.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    let session = Session {
+      slug: Some("remembered.desktop".into()),
+      name: "Remembered".into(),
+      command: "start-remembered".into(),
+      session_type: crate::ui::sessions::SessionType::Wayland,
+      ..Default::default()
+    };
+    let selection = RememberedSelection::from_session(&session).unwrap();
+    let cache = CacheStore::at(directory.path())
+      .commit(CacheUpdate::successful_login(
+        RememberedUser {
+          username: "alice".into(),
+          display_name: None,
+        },
+        Some(selection),
+        false,
+        false,
+        true,
+        false,
+      ))
+      .unwrap()
+      .state;
+
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    {
+      let mut state = greeter.write().await;
+      state.username.value = "alice".into();
+      state.remember_user_session = true;
+      state.sessions.options.push(session);
+      state.finish_cache_initialization(cache);
+    }
+    let ipc = Ipc::new();
+
+    handle(
+      greeter.clone(),
+      KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+      ipc.clone(),
+    )
+    .await
+    .unwrap();
+
+    let state = greeter.read().await;
+    assert_eq!(state.auth_state, crate::ipc::AuthState::CreatingSession);
+    assert!(matches!(state.session_source, SessionSource::Session(0)));
+    drop(state);
+    assert!(matches!(
+      ipc.next().await,
+      Some(Request::CreateSession { username }) if username == "alice"
+    ));
   }
 
   #[tokio::test]

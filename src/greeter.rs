@@ -517,6 +517,7 @@ pub(crate) struct ReloadApplied {
   pub refresh_rate: u16,
   pub warnings: Vec<String>,
   pub cache_action: Option<CacheReloadAction>,
+  pub cancel_authentication: bool,
 }
 
 impl ReloadPlan {
@@ -726,6 +727,41 @@ impl Greeter {
     self.sessions.selected = index;
     self.session_source = SessionSource::Session(index);
     true
+  }
+
+  /// Resolve the currently selected command at the trust boundary used to
+  /// begin authentication and start a session.
+  pub(crate) fn launch_command(&self) -> Option<&str> {
+    if !self.allow_command_editor && matches!(self.session_source, SessionSource::Command(_)) {
+      return None;
+    }
+
+    self
+      .session_source
+      .command(self)
+      .filter(|command| !command.trim().is_empty())
+  }
+
+  /// Move to the first greetd authentication state only when a usable launch
+  /// source already exists. The returned username is the immutable request
+  /// value that the caller should enqueue.
+  pub(crate) fn begin_authentication(&mut self) -> Option<String> {
+    if self.launch_command().is_none() {
+      self.show_command_missing();
+      return None;
+    }
+
+    self.auth_state = AuthState::CreatingSession;
+    self.message = None;
+    self.buffer.zeroize();
+    self.response_cursor = 0;
+    self.input_warning = None;
+    Some(self.username.value.clone())
+  }
+
+  pub(crate) fn show_command_missing(&mut self) {
+    self.message = Some(text!(self, command_missing));
+    self.input_warning = None;
   }
 
   // Scrub memory of all data, unless `soft` is true, in which case, we will
@@ -1234,6 +1270,14 @@ impl Greeter {
     self.settings = settings;
     self.normalize_derived_state();
 
+    // A reload may remove the final usable command while PAM is still in
+    // progress. Cancel that pre-start transaction immediately instead of
+    // accepting a password for a session that can no longer be launched.
+    let cancel_authentication = self.auth_state.can_cancel() && self.launch_command().is_none();
+    if cancel_authentication {
+      self.show_command_missing();
+    }
+
     // Initialization takes precedence over a direct purge: when no state file
     // exists, load performs the legacy migration before removing command data.
     let cache_action = if self.cache_store.is_enabled()
@@ -1258,6 +1302,7 @@ impl Greeter {
       refresh_rate: self.refresh_rate,
       warnings,
       cache_action,
+      cancel_authentication,
     }
   }
 
@@ -1937,6 +1982,21 @@ mod test {
   }
 
   #[test]
+  fn authentication_requires_a_usable_launch_source() {
+    let mut greeter = Greeter::default();
+    greeter.username.value = "alice".into();
+
+    assert!(greeter.begin_authentication().is_none());
+    assert_eq!(greeter.auth_state, crate::ipc::AuthState::Idle);
+    assert_eq!(greeter.message.as_deref(), Some("No command configured"));
+
+    greeter.session_source = SessionSource::DefaultCommand("  session command  ".into(), None);
+    assert_eq!(greeter.begin_authentication().as_deref(), Some("alice"));
+    assert_eq!(greeter.auth_state, crate::ipc::AuthState::CreatingSession);
+    assert!(greeter.message.is_none());
+  }
+
+  #[test]
   fn reload_settings_updates_runtime_values_but_keeps_startup_only_values() {
     let mut greeter = Greeter::default();
     greeter.debug = true;
@@ -1975,6 +2035,22 @@ mod test {
     assert_eq!(greeter.refresh_rate, 60);
     assert!(matches!(greeter.secret_display, SecretDisplay::Character(ref value) if value == "#"));
     assert_eq!(greeter.kb_command, 5);
+  }
+
+  #[test]
+  fn reload_removing_the_final_launch_source_requests_authentication_cancellation() {
+    let mut greeter = Greeter::default();
+    greeter.settings.command = Some("old-command".into());
+    greeter.session_source = SessionSource::DefaultCommand("old-command".into(), None);
+    greeter.auth_state = crate::ipc::AuthState::CreatingSession;
+    let mut settings = greeter.settings.clone();
+    settings.command = None;
+
+    let applied = greeter.apply_reload(reload_plan(settings));
+
+    assert!(applied.cancel_authentication);
+    assert!(matches!(greeter.session_source, SessionSource::None));
+    assert_eq!(greeter.message.as_deref(), Some("No command configured"));
   }
 
   #[test]

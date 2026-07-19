@@ -23,7 +23,6 @@ mod integration;
 use std::{env, error::Error, io, process::ExitCode, sync::Arc, time::Duration};
 
 use event::{Control, Event};
-use ipc::AuthState;
 use ratatui::{Terminal, backend::CrosstermBackend};
 use tokio::sync::{RwLock, mpsc};
 
@@ -79,10 +78,9 @@ where
   tracing::info!("tuigreet started");
 
   let ipc = Ipc::new();
-  let has_preselected_user = !greeter.username.value.is_empty();
-  if has_preselected_user {
-    greeter.auth_state = AuthState::CreatingSession;
-  }
+  let initial_username = (!greeter.username.value.is_empty())
+    .then(|| greeter.begin_authentication())
+    .flatten();
   let greeter = Arc::new(RwLock::new(greeter));
   let mut reloads = reload::ReloadCoordinator::new()?;
   let mut power_supervisor = power::PowerSupervisor::new();
@@ -109,13 +107,9 @@ where
     }
   });
 
-  if has_preselected_user {
+  if let Some(username) = initial_username {
     tracing::info!("creating initial session for preselected user");
-    ipc
-      .send(greetd_ipc::Request::CreateSession {
-        username: greeter.read().await.username.value.clone(),
-      })
-      .await;
+    ipc.send(greetd_ipc::Request::CreateSession { username }).await;
   }
 
   let mut ipc_actor_finished = false;
@@ -188,7 +182,7 @@ where
           match outcome {
             reload::ReloadOutcome::Ready { plan, mut warnings } => {
               let mut greeter_state = greeter.write().await;
-              let mut applied = greeter_state.apply_reload(*plan);
+              let mut applied = apply_config_reload(&mut greeter_state, *plan, &ipc);
               warnings.append(&mut applied.warnings);
               greeter_state.config_notice = match warnings.len() {
                 0 => None,
@@ -376,6 +370,14 @@ fn report_reload_diagnostics(state: &str, diagnostics: &[String]) {
   }
 }
 
+fn apply_config_reload(greeter: &mut Greeter, plan: ReloadPlan, ipc: &Ipc) -> ReloadApplied {
+  let applied = greeter.apply_reload(plan);
+  if applied.cancel_authentication {
+    ipc.cancel(greeter);
+  }
+  applied
+}
+
 fn report_reload_failure(message: &str) {
   eprintln!("tuigreet: error: {message}");
   tracing::error!("{message}");
@@ -541,6 +543,23 @@ mod cache_reload_tests {
     assert!(!directory.path().join("lastuser").exists());
     assert!(!directory.path().join("lastsession-path").exists());
     assert!(!directory.path().join("lastsession").exists());
+  }
+
+  #[test]
+  fn reload_cancels_live_authentication_when_the_last_launch_source_disappears() {
+    let mut greeter = Greeter::default();
+    greeter.settings.command = Some("old-command".into());
+    greeter.session_source = crate::ui::sessions::SessionSource::DefaultCommand("old-command".into(), None);
+    greeter.auth_state = crate::ipc::AuthState::CreatingSession;
+    let mut settings = greeter.settings.clone();
+    settings.command = None;
+    let plan = ReloadPlan::prepare(greeter.reload_snapshot(), settings);
+
+    let applied = apply_config_reload(&mut greeter, plan, &Ipc::new());
+
+    assert!(applied.cancel_authentication);
+    assert_eq!(greeter.auth_state, crate::ipc::AuthState::Cancelling);
+    assert_eq!(greeter.message.as_deref(), Some("No command configured"));
   }
 }
 
