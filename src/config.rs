@@ -1189,23 +1189,21 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.ipc_timeout = cli_number(matches, "ipc-timeout", 1, MAX_IPC_TIMEOUT, warnings);
   layer.quiet = cli_bool(matches, "quiet", "no-quiet", warnings);
   layer.numlock = cli_bool(matches, "numlock", "no-numlock", warnings);
-  layer.command = string("cmd").map(optional_command);
+  layer.command =
+    string("cmd").and_then(|value| valid_optional_command(value, LayerContext::CommandLine, None, "--cmd", warnings));
   layer.allow_command_editor = cli_bool(matches, "allow-command-editor", "no-command-editor", warnings);
   if matches.opt_present("env") {
-    layer.environment = Some(valid_environment(
-      matches.opt_strs("env"),
-      LayerContext::CommandLine,
-      None,
-      warnings,
-    ));
+    layer.environment = valid_environment(matches.opt_strs("env"), LayerContext::CommandLine, None, warnings);
   }
   layer.sessions = string("sessions").map(|value| split_paths(&value));
   layer.xsessions = string("xsessions").map(|value| split_paths(&value));
-  layer.session_wrapper = string("session-wrapper").map(optional_command);
+  layer.session_wrapper = string("session-wrapper")
+    .and_then(|value| valid_optional_command(value, LayerContext::CommandLine, None, "--session-wrapper", warnings));
   layer.xsession_wrapper = if matches.opt_present("no-xsession-wrapper") {
     Some(None)
   } else {
-    string("xsession-wrapper").map(optional_command)
+    string("xsession-wrapper")
+      .and_then(|value| valid_optional_command(value, LayerContext::CommandLine, None, "--xsession-wrapper", warnings))
   };
   layer.width = cli_number(matches, "width", 1, u16::MAX, warnings);
   layer.container_title = cli_container_title(matches, warnings);
@@ -1291,6 +1289,12 @@ fn cli_default_user(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Option
       warnings.push(Diagnostic::command_line(
         Some("--user"),
         "the username must not be empty; ignoring it",
+      ));
+      None
+    } else if user.contains('\0') {
+      warnings.push(Diagnostic::command_line(
+        Some("--user"),
+        "the username must not contain a NUL byte; ignoring it",
       ));
       None
     } else {
@@ -1495,7 +1499,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     warn_unknown(table, SESSION_FIELDS, path, source, warnings, "session");
     layer.command = read_optional_command(table, "command", path, source, warnings, "session");
     layer.allow_command_editor = read_bool(table, "allow-command-editor", path, source, warnings, "session");
-    layer.environment = read_strings(table, "environment", path, source, warnings, "session").map(|values| {
+    layer.environment = read_strings(table, "environment", path, source, warnings, "session").and_then(|values| {
       valid_environment(
         values,
         LayerContext::File { path, source },
@@ -1561,7 +1565,23 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   if let Some(table) = read_table(document.as_table(), "users", path, source, warnings) {
     layer.spans.uid_range = combined_item_span(table, &["min-uid", "max-uid"]);
     warn_unknown(table, USER_FIELDS, path, source, warnings, "users");
-    layer.default_user = read_optional_string(table, "default", path, source, warnings, "users");
+    layer.default_user = read_optional_string(table, "default", path, source, warnings, "users").and_then(|value| {
+      value.map_or(Some(None), |username| {
+        if username.contains('\0') {
+          warn_field_item(
+            table.get("default"),
+            path,
+            source,
+            warnings,
+            "users.default",
+            "users.default must not contain a NUL byte; ignoring it",
+          );
+          None
+        } else {
+          Some(Some(username))
+        }
+      })
+    });
     layer.user_menu = read_bool(table, "menu", path, source, warnings, "users");
     layer.user_autocomplete = read_bool(table, "autocomplete", path, source, warnings, "users");
     layer.min_uid = read_u32(table, "min-uid", path, source, warnings, "users").map(Some);
@@ -1798,11 +1818,36 @@ fn read_optional_command(
   prefix: &str,
 ) -> Option<Option<String>> {
   let value = read_string(table, key, path, source, warnings, prefix)?;
-  Some(optional_command(value))
+  valid_optional_command(
+    value,
+    LayerContext::File { path, source },
+    table.get(key).and_then(Item::span),
+    &format!("{prefix}.{key}"),
+    warnings,
+  )
 }
 
 fn optional_command(value: String) -> Option<String> {
   (!value.trim().is_empty()).then_some(value)
+}
+
+fn valid_optional_command(
+  value: String,
+  context: LayerContext<'_>,
+  span: Option<Range<usize>>,
+  field: &str,
+  warnings: &mut Vec<Diagnostic>,
+) -> Option<Option<String>> {
+  if value.contains('\0') {
+    warnings.push(context.warning(
+      span,
+      Some(field),
+      format!("{field} must not contain a NUL byte; ignoring it"),
+    ));
+    None
+  } else {
+    Some(optional_command(value))
+  }
 }
 
 fn read_power_command(
@@ -1881,7 +1926,13 @@ fn read_string_or_false(
   if item.as_bool() == Some(false) {
     Some(None)
   } else if let Some(value) = item.as_str() {
-    Some(optional_command(value.to_string()))
+    valid_optional_command(
+      value.to_string(),
+      LayerContext::File { path, source },
+      item.span(),
+      &format!("{prefix}.{key}"),
+      warnings,
+    )
   } else {
     let field = format!("{prefix}.{key}");
     warn_field_item(
@@ -2049,25 +2100,29 @@ fn valid_environment(
   context: LayerContext<'_>,
   span: Option<Range<usize>>,
   warnings: &mut Vec<Diagnostic>,
-) -> Vec<String> {
-  values
+) -> Option<Vec<String>> {
+  let was_empty = values.is_empty();
+  let valid: Vec<_> = values
     .into_iter()
     .filter(|value| {
-      let valid = value.split_once('=').is_some_and(|(key, _)| !key.is_empty());
+      let valid = !value.contains('\0') && value.split_once('=').is_some_and(|(key, _)| !key.is_empty());
       if !valid {
         let field = match context {
           LayerContext::CommandLine => "--env",
           LayerContext::File { .. } => "session.environment",
         };
-        warnings.push(context.warning(
-          span.clone(),
-          Some(field),
-          format!("malformed environment entry '{value}'; ignoring it"),
-        ));
+        let message = if value.contains('\0') {
+          "environment entries must not contain NUL bytes; ignoring this entry".to_string()
+        } else {
+          format!("malformed environment entry '{value}'; ignoring it")
+        };
+        warnings.push(context.warning(span.clone(), Some(field), message));
       }
       valid
     })
-    .collect()
+    .collect();
+
+  (was_empty || !valid.is_empty()).then_some(valid)
 }
 
 fn valid_time_format(
@@ -2685,6 +2740,68 @@ mod tests {
     assert_eq!(from_cli.command.as_deref(), Some("  cli-command --flag  "));
     assert_eq!(from_cli.session_wrapper.as_deref(), Some("  cli-wrapper  "));
     assert_eq!(from_cli.xsession_wrapper.as_deref(), Some("  cli-xwrapper  "));
+  }
+
+  #[test]
+  fn nul_values_at_execution_boundaries_preserve_lower_layers() {
+    let dir = tempdir().unwrap();
+    let system = dir.path().join("system.toml");
+    let explicit = dir.path().join("explicit.toml");
+    write(
+      &system,
+      "[session]\ncommand = 'system-command'\nwrapper = 'system-wrapper'\nxsession-wrapper = 'system-xwrapper'\nenvironment = ['SYSTEM=value']\n[users]\ndefault = 'alice'\n",
+    );
+    write(
+      &explicit,
+      "[session]\ncommand = \"bad\\u0000command\"\nwrapper = \"bad\\u0000wrapper\"\nxsession-wrapper = \"bad\\u0000xwrapper\"\nenvironment = [\"BAD\\u0000=value\", \"BAD=value\\u0000\"]\n[users]\ndefault = \"bad\\u0000user\"\n",
+    );
+
+    let (from_toml, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+
+    assert_eq!(from_toml.command.as_deref(), Some("system-command"));
+    assert_eq!(from_toml.session_wrapper.as_deref(), Some("system-wrapper"));
+    assert_eq!(from_toml.xsession_wrapper.as_deref(), Some("system-xwrapper"));
+    assert_eq!(from_toml.environment, ["SYSTEM=value"]);
+    assert_eq!(from_toml.default_user.as_deref(), Some("alice"));
+    assert_eq!(warnings.len(), 6, "{warnings:?}");
+    assert!(warnings.iter().all(|warning| warning.contains("NUL")));
+
+    let cli = matches(&[
+      "--cmd",
+      "bad\0command",
+      "--session-wrapper",
+      "bad\0wrapper",
+      "--xsession-wrapper",
+      "bad\0xwrapper",
+      "--env",
+      "BAD\0=value",
+      "--user",
+      "bad\0user",
+    ]);
+    let (from_cli, warnings) = load_paths(Some(&system), None, &cli);
+
+    assert_eq!(from_cli.command.as_deref(), Some("system-command"));
+    assert_eq!(from_cli.session_wrapper.as_deref(), Some("system-wrapper"));
+    assert_eq!(from_cli.xsession_wrapper.as_deref(), Some("system-xwrapper"));
+    assert_eq!(from_cli.environment, ["SYSTEM=value"]);
+    assert_eq!(from_cli.default_user.as_deref(), Some("alice"));
+    assert_eq!(warnings.len(), 5, "{warnings:?}");
+    assert!(warnings.iter().all(|warning| warning.contains("NUL")));
+  }
+
+  #[test]
+  fn environment_keys_follow_process_environment_semantics() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write(
+      &config,
+      "[session]\nenvironment = ['hyphen-name=value', 'dot.name=value', 'A=B=C']\n",
+    );
+
+    let (settings, warnings) = load_paths(Some(&config), None, &matches(&[]));
+
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(settings.environment, ["hyphen-name=value", "dot.name=value", "A=B=C"]);
   }
 
   #[test]
