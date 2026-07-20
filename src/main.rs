@@ -25,7 +25,10 @@ use std::{env, error::Error, io, process::ExitCode, sync::Arc, time::Duration};
 
 use event::{Control, Event};
 use ratatui::{Terminal, backend::CrosstermBackend};
-use tokio::sync::{RwLock, mpsc};
+use tokio::{
+  net::UnixStream,
+  sync::{RwLock, mpsc},
+};
 
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
@@ -56,14 +59,30 @@ async fn main() -> ExitCode {
   // the watcher observes it relative to this baseline and requests a reload.
   let watcher = ConfigWatcher::spawn(ConfigWatcher::capture(config::watched_paths(&matches)));
   let greeter = Greeter::new(matches).await;
+  let ipc = Ipc::new();
+  // Real power actions intentionally do not authenticate, so no interactive
+  // terminal state is safe to expose until the greetd transport is usable.
+  // Transfer this connection to the actor instead of making a throwaway probe.
+  let initial_stream = match ipc.connect(&greeter).await {
+    Ok(stream) => stream,
+    Err(error) => {
+      eprintln!("tuigreet: error: {error}");
+      return ExitCode::FAILURE;
+    },
+  };
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
   events.set_refresh_rate(greeter.refresh_rate);
 
-  match run(backend, greeter, events, watcher).await {
+  match run(backend, greeter, events, watcher, ipc, initial_stream).await {
     Err(error) if matches!(error.downcast_ref::<AuthStatus>(), Some(AuthStatus::Success)) => ExitCode::SUCCESS,
     Ok(()) => ExitCode::SUCCESS,
-    Err(_) => ExitCode::FAILURE,
+    Err(error) => {
+      if error.downcast_ref::<AuthStatus>().is_none() {
+        eprintln!("tuigreet: error: {error}");
+      }
+      ExitCode::FAILURE
+    },
   }
 }
 
@@ -72,6 +91,8 @@ async fn run<B>(
   mut greeter: Greeter,
   mut events: Events,
   mut watcher: ConfigWatcher,
+  ipc: Ipc,
+  initial_stream: Option<UnixStream>,
 ) -> Result<(), Box<dyn Error>>
 where
   B: ratatui::backend::Backend,
@@ -79,7 +100,6 @@ where
 {
   tracing::info!("tuigreet started");
 
-  let ipc = Ipc::new();
   let initial_username = (!greeter.username.value.is_empty())
     .then(|| greeter.begin_authentication())
     .flatten();
@@ -105,7 +125,7 @@ where
     let renders = events.sender();
 
     async move {
-      ipc.run(greeter, control_tx, renders).await;
+      ipc.run(greeter, control_tx, renders, initial_stream).await;
     }
   });
 

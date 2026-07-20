@@ -31,6 +31,7 @@ use crate::{
   CliInvocation,
   Greeter,
   event::{Event, Events},
+  ipc::Ipc,
   ui::sessions::SessionSource,
   watcher::ConfigWatcher,
 };
@@ -100,7 +101,12 @@ impl IntegrationRunner {
 
       greeter.logfile = "/tmp/tuigreet.log".to_string();
       greeter.socket = socket_path.to_str().unwrap().to_string();
-      match crate::run(backend, greeter, events, ConfigWatcher::disabled()).await {
+      let ipc = Ipc::new();
+      let initial_stream = ipc
+        .connect(&greeter)
+        .await
+        .map_err(|error| format!("tuigreet transport setup failed: {error}"))?;
+      match crate::run(backend, greeter, events, ConfigWatcher::disabled(), ipc, initial_stream).await {
         Ok(()) => Err("tuigreet returned without an authentication status".to_string()),
         Err(error) => match error.downcast_ref::<AuthStatus>() {
           Some(status) => Ok(*status),

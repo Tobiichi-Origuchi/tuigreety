@@ -509,6 +509,21 @@ fn information_actions_need_neither_tty_nor_greetd_socket() {
   }
 }
 
+#[test]
+fn real_startup_requires_a_connectable_greetd_socket_before_terminal_setup() {
+  let temp = TempDir::new().expect("failed to create process-test directory");
+  let config = temp.path().join("config.toml");
+  write_config(&config, real_config("PROCESS-PREFLIGHT"));
+  let args = ["--config", config.to_str().expect("non-UTF-8 test path")];
+
+  let missing = run_without_terminal(&args, &[]);
+  assert_startup_transport_failure(&missing, "GREETD_SOCK must be defined");
+
+  let unavailable = temp.path().join("missing-greetd.sock");
+  let unconnectable = run_without_terminal(&args, &[("GREETD_SOCK", unavailable.as_os_str())]);
+  assert_startup_transport_failure(&unconnectable, "failed to connect to greetd socket");
+}
+
 async fn serve_authentication(listener: UnixListener) -> Result<IpcExchange, String> {
   let (mut stream, _) = listener.accept().await.map_err(|error| error.to_string())?;
 
@@ -603,14 +618,21 @@ fn set_nonblocking(file: &File) {
 }
 
 fn run_information_action(args: &[&str]) -> Output {
-  let mut child = Command::new(env!("CARGO_BIN_EXE_tuigreet"))
+  run_without_terminal(args, &[])
+}
+
+fn run_without_terminal(args: &[&str], environment: &[(&str, &OsStr)]) -> Output {
+  let mut command = Command::new(env!("CARGO_BIN_EXE_tuigreet"));
+  command
     .args(args)
     .env_remove("GREETD_SOCK")
     .stdin(Stdio::null())
     .stdout(Stdio::piped())
-    .stderr(Stdio::piped())
-    .spawn()
-    .expect("failed to run tuigreet information action");
+    .stderr(Stdio::piped());
+  for (key, value) in environment {
+    command.env(key, value);
+  }
+  let mut child = command.spawn().expect("failed to run tuigreet without a terminal");
   let deadline = Instant::now() + PROCESS_TIMEOUT;
 
   loop {
@@ -625,13 +647,33 @@ fn run_information_action(args: &[&str]) -> Output {
         .wait_with_output()
         .expect("failed to collect timed-out information action output");
       panic!(
-        "information action {args:?} timed out: {}{}",
+        "noninteractive invocation {args:?} timed out: {}{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
       );
     }
     thread::sleep(POLL_DELAY);
   }
+}
+
+fn assert_startup_transport_failure(output: &Output, expected: &str) {
+  let mut combined = output.stdout.clone();
+  combined.extend_from_slice(&output.stderr);
+  assert!(
+    !output.status.success(),
+    "startup unexpectedly succeeded: {}",
+    String::from_utf8_lossy(&combined)
+  );
+  assert!(
+    contains_bytes(&combined, expected.as_bytes()),
+    "startup did not report {expected:?}: {}",
+    String::from_utf8_lossy(&combined)
+  );
+  assert!(
+    !contains_bytes(&combined, ENTER_ALTERNATE_SCREEN) && !contains_bytes(&combined, HIDE_CURSOR),
+    "startup touched terminal state before rejecting its greetd transport: {}",
+    String::from_utf8_lossy(&combined)
+  );
 }
 
 fn contains_bytes(haystack: &[u8], needle: &[u8]) -> bool {

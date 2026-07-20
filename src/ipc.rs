@@ -2,6 +2,7 @@ use std::{
   borrow::Cow,
   env,
   error::Error,
+  ffi::OsString,
   io,
   sync::{
     Arc,
@@ -203,6 +204,19 @@ impl Ipc {
     self.queue_request(SensitiveRequest::new(request)).await;
   }
 
+  pub(crate) async fn connect(&self, greeter: &Greeter) -> io::Result<Option<UnixStream>> {
+    if greeter.mock {
+      tracing::info!("mock mode: skipping greetd socket connection");
+      return Ok(None);
+    }
+
+    let socket = socket_path(greeter).map_err(transaction_io_error)?;
+    connect_socket(socket, Duration::from_secs(u64::from(greeter.ipc_timeout)))
+      .await
+      .map(Some)
+      .map_err(transaction_io_error)
+  }
+
   async fn queue_request(&self, request: SensitiveRequest) {
     let generation = self.0.cancel_generation.load(Ordering::Acquire);
     let _ = self.0.tx.send(QueuedRequest { request, generation }).await;
@@ -243,8 +257,13 @@ impl Ipc {
     Ok(outcome.control)
   }
 
-  pub async fn run(&self, greeter: Arc<RwLock<Greeter>>, controls: UnboundedSender<Control>, renders: Sender<Event>) {
-    let mut stream = None;
+  pub async fn run(
+    &self,
+    greeter: Arc<RwLock<Greeter>>,
+    controls: UnboundedSender<Control>,
+    renders: Sender<Event>,
+    mut stream: Option<UnixStream>,
+  ) {
     let mut failures = 0_u8;
     // A cancellation can be requested immediately after spawning this actor,
     // before its future is first polled. Start at the initial generation so
@@ -393,24 +412,13 @@ impl Ipc {
     }
 
     if stream.is_none() {
-      let socket = {
-        let configured = greeter.read().await.socket.clone();
-        if configured.is_empty() {
-          env::var("GREETD_SOCK").map_err(|_| TransactionFailure::Transport("GREETD_SOCK must be defined".into()))?
-        } else {
-          configured
-        }
-      };
-      let connect = UnixStream::connect(socket);
+      let socket = socket_path(&*greeter.read().await)?;
+      let connect = connect_socket(socket, ipc_timeout);
       let connected = tokio::select! {
         biased;
         _ = self.wait_for_shutdown() => return Err(TransactionFailure::Shutdown),
         _ = self.wait_for_cancel(generation) => return Err(TransactionFailure::Cancelled),
-        result = timeout(ipc_timeout, connect) => match result {
-          Ok(Ok(stream)) => stream,
-          Ok(Err(error)) => return Err(TransactionFailure::Transport(error.to_string())),
-          Err(_) => return Err(TransactionFailure::TimedOut),
-        },
+        result = connect => result?,
       };
       *stream = Some(connected);
     }
@@ -729,6 +737,27 @@ impl Ipc {
   }
 }
 
+fn socket_path(greeter: &Greeter) -> Result<OsString, TransactionFailure> {
+  if greeter.socket.is_empty() {
+    env::var_os("GREETD_SOCK").ok_or_else(|| TransactionFailure::Transport("GREETD_SOCK must be defined".into()))
+  } else {
+    Ok(OsString::from(&greeter.socket))
+  }
+}
+
+async fn connect_socket(socket: OsString, ipc_timeout: Duration) -> Result<UnixStream, TransactionFailure> {
+  match timeout(ipc_timeout, UnixStream::connect(&socket)).await {
+    Ok(Ok(stream)) => Ok(stream),
+    Ok(Err(error)) => Err(TransactionFailure::Transport(format!(
+      "failed to connect to greetd socket {socket:?}: {error}"
+    ))),
+    Err(_) => Err(TransactionFailure::Transport(format!(
+      "timed out connecting to greetd socket {socket:?} after {} seconds",
+      ipc_timeout.as_secs()
+    ))),
+  }
+}
+
 async fn finish_cancellation(greeter: &Arc<RwLock<Greeter>>) {
   let mut greeter = greeter.write().await;
   greeter.reset_local(false);
@@ -763,7 +792,11 @@ async fn persist_cache(store: CacheStore, update: Option<CacheUpdate>) {
 
 #[cfg(test)]
 fn transaction_error(error: TransactionFailure) -> Box<dyn Error + Send + Sync> {
-  io::Error::other(transaction_error_message(&error)).into()
+  transaction_io_error(error).into()
+}
+
+fn transaction_io_error(error: TransactionFailure) -> io::Error {
+  io::Error::other(transaction_error_message(&error))
 }
 
 fn transaction_error_message(error: &TransactionFailure) -> String {
@@ -964,7 +997,7 @@ mod test {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
     let (controls, _control_rx) = tokio_mpsc::unbounded_channel();
     let (renders, _render_rx) = tokio_mpsc::channel(1);
-    ipc.run(greeter, controls, renders).await;
+    ipc.run(greeter, controls, renders, None).await;
 
     assert!(result.recv().unwrap());
   }
@@ -986,7 +1019,7 @@ mod test {
     let (renders, _render_rx) = tokio_mpsc::channel(1);
     let actor = tokio::spawn({
       let ipc = ipc.clone();
-      async move { ipc.run(greeter, controls, renders).await }
+      async move { ipc.run(greeter, controls, renders, None).await }
     });
 
     assert!(
@@ -1018,7 +1051,7 @@ mod test {
     let (renders, _render_rx) = tokio_mpsc::channel(1);
     let actor = tokio::spawn({
       let ipc = ipc.clone();
-      async move { ipc.run(greeter, controls, renders).await }
+      async move { ipc.run(greeter, controls, renders, None).await }
     });
 
     assert!(
@@ -1195,7 +1228,7 @@ mod test {
       let ipc = ipc.clone();
       let greeter = greeter.clone();
       let renders = events.sender();
-      async move { ipc.run(greeter, control_tx, renders).await }
+      async move { ipc.run(greeter, control_tx, renders, None).await }
     });
 
     ipc.cancel(&mut *greeter.write().await);
