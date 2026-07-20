@@ -27,6 +27,69 @@ const DEFAULT_MAX_UID: u32 = 60000;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
 
+const CONFIG_SECTIONS: &[&str] = &[
+  "general",
+  "session",
+  "display",
+  "remember",
+  "users",
+  "secret",
+  "layout",
+  "power",
+  "keybindings",
+  "theme",
+];
+const GENERAL_FIELDS: &[&str] = &["debug", "log-file", "ipc-timeout", "mock"];
+const SESSION_FIELDS: &[&str] = &[
+  "command",
+  "allow-command-editor",
+  "environment",
+  "sessions",
+  "xsessions",
+  "wrapper",
+  "xsession-wrapper",
+];
+const DISPLAY_FIELDS: &[&str] = &[
+  "width",
+  "issue",
+  "greeting",
+  "time",
+  "time-format",
+  "refresh-rate",
+  "theme",
+];
+const REMEMBER_FIELDS: &[&str] = &["username", "session", "user-session"];
+const USER_FIELDS: &[&str] = &["menu", "autocomplete", "min-uid", "max-uid"];
+const SECRET_FIELDS: &[&str] = &["asterisks", "characters"];
+const LAYOUT_FIELDS: &[&str] = &["window-padding", "container-padding", "prompt-padding", "greet-align"];
+const POWER_FIELDS: &[&str] = &["shutdown", "reboot", "suspend", "hibernate", "setsid"];
+const KEYBINDING_FIELDS: &[&str] = &["command", "sessions", "power"];
+const THEME_FIELDS: &[&str] = &[
+  "border",
+  "text",
+  "time",
+  "container",
+  "title",
+  "greet",
+  "prompt",
+  "input",
+  "action",
+  "button",
+];
+#[cfg(test)]
+const CONFIG_SCHEMA: &[(&str, &[&str])] = &[
+  ("general", GENERAL_FIELDS),
+  ("session", SESSION_FIELDS),
+  ("display", DISPLAY_FIELDS),
+  ("remember", REMEMBER_FIELDS),
+  ("users", USER_FIELDS),
+  ("secret", SECRET_FIELDS),
+  ("layout", LAYOUT_FIELDS),
+  ("power", POWER_FIELDS),
+  ("keybindings", KEYBINDING_FIELDS),
+  ("theme", THEME_FIELDS),
+];
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Severity {
   Warning,
@@ -933,30 +996,11 @@ where
 }
 
 fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: &mut Vec<Diagnostic>) -> Layer {
-  const ROOT: &[&str] = &[
-    "general",
-    "session",
-    "display",
-    "remember",
-    "users",
-    "secret",
-    "layout",
-    "power",
-    "keybindings",
-    "theme",
-  ];
-  warn_unknown(document.as_table(), ROOT, path, source, warnings, "");
+  warn_unknown(document.as_table(), CONFIG_SECTIONS, path, source, warnings, "");
   let mut layer = Layer::default();
 
   if let Some(table) = read_table(document.as_table(), "general", path, source, warnings) {
-    warn_unknown(
-      table,
-      &["debug", "log-file", "ipc-timeout", "mock"],
-      path,
-      source,
-      warnings,
-      "general",
-    );
+    warn_unknown(table, GENERAL_FIELDS, path, source, warnings, "general");
     layer.debug = read_bool(table, "debug", path, source, warnings, "general");
     layer.logfile = read_string(table, "log-file", path, source, warnings, "general");
     layer.ipc_timeout = read_u16(
@@ -971,16 +1015,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.mock = read_bool(table, "mock", path, source, warnings, "general");
   }
   if let Some(table) = read_table(document.as_table(), "session", path, source, warnings) {
-    const KEYS: &[&str] = &[
-      "command",
-      "allow-command-editor",
-      "environment",
-      "sessions",
-      "xsessions",
-      "wrapper",
-      "xsession-wrapper",
-    ];
-    warn_unknown(table, KEYS, path, source, warnings, "session");
+    warn_unknown(table, SESSION_FIELDS, path, source, warnings, "session");
     layer.command = read_optional_command(table, "command", path, source, warnings, "session");
     layer.allow_command_editor = read_bool(table, "allow-command-editor", path, source, warnings, "session");
     layer.environment = read_strings(table, "environment", path, source, warnings, "session").map(|values| {
@@ -997,17 +1032,8 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.xsession_wrapper = read_string_or_false(table, "xsession-wrapper", path, source, warnings, "session");
   }
   if let Some(table) = read_table(document.as_table(), "display", path, source, warnings) {
-    const KEYS: &[&str] = &[
-      "width",
-      "issue",
-      "greeting",
-      "time",
-      "time-format",
-      "refresh-rate",
-      "theme",
-    ];
     layer.spans.display_identity = combined_item_span(table, &["issue", "greeting"]);
-    warn_unknown(table, KEYS, path, source, warnings, "display");
+    warn_unknown(table, DISPLAY_FIELDS, path, source, warnings, "display");
     layer.width = read_u16(table, "width", (1, u16::MAX), path, source, warnings, "display");
     layer.issue = read_bool(table, "issue", path, source, warnings, "display");
     layer.greeting = read_optional_string(table, "greeting", path, source, warnings, "display");
@@ -1046,35 +1072,21 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   }
   if let Some(table) = read_table(document.as_table(), "remember", path, source, warnings) {
     layer.spans.remember_sessions = combined_item_span(table, &["username", "session", "user-session"]);
-    warn_unknown(
-      table,
-      &["username", "session", "user-session"],
-      path,
-      source,
-      warnings,
-      "remember",
-    );
+    warn_unknown(table, REMEMBER_FIELDS, path, source, warnings, "remember");
     layer.remember = read_bool(table, "username", path, source, warnings, "remember");
     layer.remember_session = read_bool(table, "session", path, source, warnings, "remember");
     layer.remember_user_session = read_bool(table, "user-session", path, source, warnings, "remember");
   }
   if let Some(table) = read_table(document.as_table(), "users", path, source, warnings) {
     layer.spans.uid_range = combined_item_span(table, &["min-uid", "max-uid"]);
-    warn_unknown(
-      table,
-      &["menu", "autocomplete", "min-uid", "max-uid"],
-      path,
-      source,
-      warnings,
-      "users",
-    );
+    warn_unknown(table, USER_FIELDS, path, source, warnings, "users");
     layer.user_menu = read_bool(table, "menu", path, source, warnings, "users");
     layer.user_autocomplete = read_bool(table, "autocomplete", path, source, warnings, "users");
     layer.min_uid = read_u32(table, "min-uid", path, source, warnings, "users").map(Some);
     layer.max_uid = read_u32(table, "max-uid", path, source, warnings, "users").map(Some);
   }
   if let Some(table) = read_table(document.as_table(), "secret", path, source, warnings) {
-    warn_unknown(table, &["asterisks", "characters"], path, source, warnings, "secret");
+    warn_unknown(table, SECRET_FIELDS, path, source, warnings, "secret");
     layer.asterisks = read_bool(table, "asterisks", path, source, warnings, "secret");
     if let Some(value) = read_string(table, "characters", path, source, warnings, "secret") {
       if value.is_empty() {
@@ -1092,8 +1104,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     }
   }
   if let Some(table) = read_table(document.as_table(), "layout", path, source, warnings) {
-    const KEYS: &[&str] = &["window-padding", "container-padding", "prompt-padding", "greet-align"];
-    warn_unknown(table, KEYS, path, source, warnings, "layout");
+    warn_unknown(table, LAYOUT_FIELDS, path, source, warnings, "layout");
     layer.window_padding = read_u16(table, "window-padding", (0, u16::MAX), path, source, warnings, "layout");
     layer.container_padding = read_u16(
       table,
@@ -1121,8 +1132,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     }
   }
   if let Some(table) = read_table(document.as_table(), "power", path, source, warnings) {
-    const KEYS: &[&str] = &["shutdown", "reboot", "suspend", "hibernate", "setsid"];
-    warn_unknown(table, KEYS, path, source, warnings, "power");
+    warn_unknown(table, POWER_FIELDS, path, source, warnings, "power");
     layer.power_shutdown = read_power_command(table, "shutdown", path, source, warnings);
     layer.power_reboot = read_power_command(table, "reboot", path, source, warnings);
     layer.power_suspend = read_power_command(table, "suspend", path, source, warnings);
@@ -1131,32 +1141,13 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   }
   if let Some(table) = read_table(document.as_table(), "keybindings", path, source, warnings) {
     layer.spans.keybindings = combined_item_span(table, &["command", "sessions", "power"]);
-    warn_unknown(
-      table,
-      &["command", "sessions", "power"],
-      path,
-      source,
-      warnings,
-      "keybindings",
-    );
+    warn_unknown(table, KEYBINDING_FIELDS, path, source, warnings, "keybindings");
     layer.kb_command = read_u8(table, "command", (1, 12), path, source, warnings, "keybindings");
     layer.kb_sessions = read_u8(table, "sessions", (1, 12), path, source, warnings, "keybindings");
     layer.kb_power = read_u8(table, "power", (1, 12), path, source, warnings, "keybindings");
   }
   if let Some(table) = read_table(document.as_table(), "theme", path, source, warnings) {
-    const KEYS: &[&str] = &[
-      "border",
-      "text",
-      "time",
-      "container",
-      "title",
-      "greet",
-      "prompt",
-      "input",
-      "action",
-      "button",
-    ];
-    warn_unknown(table, KEYS, path, source, warnings, "theme");
+    warn_unknown(table, THEME_FIELDS, path, source, warnings, "theme");
     macro_rules! read_theme {
       ($($field:ident),* $(,)?) => {
         $(layer.theme.$field = read_theme_color(table, stringify!($field), path, source, warnings);)*
@@ -1664,7 +1655,12 @@ fn split_paths(value: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-  use std::{fs, os::unix::fs::PermissionsExt, path::Path};
+  use std::{
+    collections::BTreeSet,
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+  };
 
   use ratatui::style::Color;
   use tempfile::tempdir;
@@ -1672,7 +1668,7 @@ mod tests {
   use super::{ThemeColor, load_paths, load_paths_with_uid_defaults, read_uid_defaults, reload_paths};
   use crate::{
     Greeter,
-    power::PowerCommand,
+    power::{CommandLine, PowerCommand},
     ui::common::style::{Theme, Themed},
   };
 
@@ -2213,14 +2209,47 @@ mod tests {
 
   #[test]
   fn distributed_example_is_complete_and_valid() {
-    let document = include_str!("../contrib/tuigreet.toml")
-      .parse::<toml_edit::Document<String>>()
-      .unwrap();
+    let source = include_str!("../contrib/tuigreet.toml");
+    let mut uncommented = String::new();
+    let mut documented = BTreeSet::new();
+    let mut section = None;
+    for line in source.lines() {
+      let trimmed = line.trim();
+      if let Some(name) = trimmed.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        section = Some(name);
+      }
+      let assignment = trimmed.strip_prefix("# ").and_then(|line| {
+        let (key, _) = line.split_once(" = ")?;
+        key
+          .chars()
+          .all(|character| character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-')
+          .then_some((key, line))
+      });
+      if let Some((key, assignment)) = assignment {
+        let section = section.expect("documented assignment before a section");
+        documented.insert(format!("{section}.{key}"));
+        uncommented.push_str(assignment);
+      } else {
+        uncommented.push_str(line);
+      }
+      uncommented.push('\n');
+    }
+
+    let expected_fields = super::CONFIG_SCHEMA
+      .iter()
+      .flat_map(|(section, fields)| fields.iter().map(move |field| format!("{section}.{field}")))
+      .collect::<BTreeSet<_>>();
+    assert_eq!(
+      documented, expected_fields,
+      "the distributed example and parser schema differ"
+    );
+
+    let document = uncommented.parse::<toml_edit::Document<String>>().unwrap();
     let mut warnings = Vec::new();
     let layer = super::toml_layer(
       &document,
       Path::new("contrib/tuigreet.toml"),
-      include_str!("../contrib/tuigreet.toml"),
+      &uncommented,
       &mut warnings,
     );
     let mut settings = super::Settings::default();
@@ -2229,13 +2258,70 @@ mod tests {
       layer,
       super::LayerContext::File {
         path: Path::new("contrib/tuigreet.toml"),
-        source: include_str!("../contrib/tuigreet.toml"),
+        source: &uncommented,
       },
       &mut warnings,
     );
 
     assert!(warnings.is_empty(), "{warnings:?}");
-    assert_eq!(settings, super::Settings::default());
+    let command = |argv: &[&str]| {
+      PowerCommand::Explicit(
+        CommandLine::from_argv(argv.iter().map(|argument| (*argument).to_string()).collect()).unwrap(),
+      )
+    };
+    assert_eq!(settings, super::Settings {
+      debug: false,
+      logfile: "/tmp/tuigreet.log".into(),
+      ipc_timeout: 120,
+      command: Some("sway".into()),
+      allow_command_editor: false,
+      environment: vec!["XDG_CURRENT_DESKTOP=sway".into()],
+      sessions: Vec::new(),
+      xsessions: Vec::new(),
+      session_wrapper: Some("dbus-run-session".into()),
+      xsession_wrapper: Some("startx /usr/bin/env".into()),
+      width: 80,
+      issue: false,
+      greeting: Some("Welcome".into()),
+      time: false,
+      time_format: Some("%Y-%m-%d %H:%M".into()),
+      refresh_rate: 2,
+      remember: false,
+      remember_session: false,
+      remember_user_session: false,
+      user_menu: false,
+      user_autocomplete: false,
+      min_uid: Some(1000),
+      max_uid: Some(60000),
+      uid_defaults: (1000, 60000),
+      theme: super::ThemeSettings {
+        border: super::ThemeColor::Value("blue".into()),
+        text: super::ThemeColor::Value("white".into()),
+        time: super::ThemeColor::Value("white".into()),
+        container: super::ThemeColor::Value("black".into()),
+        title: super::ThemeColor::Value("blue".into()),
+        greet: super::ThemeColor::Value("white".into()),
+        prompt: super::ThemeColor::Value("white".into()),
+        input: super::ThemeColor::Value("white".into()),
+        action: super::ThemeColor::Value("white".into()),
+        button: super::ThemeColor::Value("white".into()),
+      },
+      asterisks: false,
+      asterisks_chars: "*".into(),
+      window_padding: 0,
+      container_padding: 1,
+      prompt_padding: 1,
+      greet_align: "center".into(),
+      power_shutdown: command(&["shutdown", "-h", "now"]),
+      power_reboot: command(&["shutdown", "-r", "now"]),
+      power_suspend: command(&["systemctl", "suspend"]),
+      power_hibernate: command(&["systemctl", "hibernate"]),
+      power_setsid: true,
+      mock: false,
+      kb_command: 2,
+      kb_sessions: 3,
+      kb_power: 12,
+    });
   }
 
   #[test]

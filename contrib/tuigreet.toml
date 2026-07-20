@@ -49,6 +49,8 @@
 # time-format = "%Y-%m-%d %H:%M"
 # Screen refresh rate in frames per second; valid range: 1..=240.
 # refresh-rate = 2
+# Legacy semicolon-separated theme overlay (example); prefer the [theme] table.
+# theme = "border=blue;text=white"
 
 [theme]
 # Ratatui color names are accepted. Use false to clear an inherited color.
