@@ -39,7 +39,7 @@ const CONFIG_SECTIONS: &[&str] = &[
   "keybindings",
   "theme",
 ];
-const GENERAL_FIELDS: &[&str] = &["debug", "log-file", "ipc-timeout", "quiet", "mock"];
+const GENERAL_FIELDS: &[&str] = &["debug", "log-file", "ipc-timeout", "quiet", "numlock", "mock"];
 const SESSION_FIELDS: &[&str] = &[
   "command",
   "allow-command-editor",
@@ -280,6 +280,7 @@ pub struct Settings {
   pub logfile: String,
   pub ipc_timeout: u16,
   pub quiet: bool,
+  pub numlock: bool,
   pub command: Option<String>,
   pub allow_command_editor: bool,
   pub environment: Vec<String>,
@@ -328,6 +329,7 @@ impl Default for Settings {
       logfile: DEFAULT_LOG_FILE.into(),
       ipc_timeout: DEFAULT_IPC_TIMEOUT,
       quiet: false,
+      numlock: false,
       command: None,
       allow_command_editor: false,
       environment: Vec::new(),
@@ -387,6 +389,7 @@ struct Layer {
   logfile: Option<String>,
   ipc_timeout: Option<u16>,
   quiet: Option<bool>,
+  numlock: Option<bool>,
   command: Option<Option<String>>,
   allow_command_editor: Option<bool>,
   environment: Option<Vec<String>>,
@@ -794,6 +797,7 @@ fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>,
     logfile,
     ipc_timeout,
     quiet,
+    numlock,
     command,
     allow_command_editor,
     environment,
@@ -923,6 +927,7 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   }
   layer.ipc_timeout = cli_number(matches, "ipc-timeout", 1, MAX_IPC_TIMEOUT, warnings);
   layer.quiet = cli_bool(matches, "quiet", "no-quiet", warnings);
+  layer.numlock = cli_bool(matches, "numlock", "no-numlock", warnings);
   layer.command = string("cmd").map(optional_command);
   layer.allow_command_editor = cli_bool(matches, "allow-command-editor", "no-command-editor", warnings);
   if matches.opt_present("env") {
@@ -1121,6 +1126,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
       "general",
     );
     layer.quiet = read_bool(table, "quiet", path, source, warnings, "general");
+    layer.numlock = read_bool(table, "numlock", path, source, warnings, "general");
     layer.mock = read_bool(table, "mock", path, source, warnings, "general");
   }
   if let Some(table) = read_table(document.as_table(), "session", path, source, warnings) {
@@ -1866,7 +1872,7 @@ mod tests {
     let enabled = dir.path().join("enabled.toml");
     write(
       &enabled,
-      "[general]\ndebug = true\nquiet = true\nmock = true\n\
+      "[general]\ndebug = true\nquiet = true\nnumlock = true\nmock = true\n\
        [display]\nissue = true\ntime = true\n\
        [remember]\nusername = true\nsession = true\n\
        [users]\nmenu = true\nautocomplete = true\n\
@@ -1879,6 +1885,7 @@ mod tests {
       &matches(&[
         "--no-debug",
         "--no-quiet",
+        "--no-numlock",
         "--no-mock",
         "--no-issue",
         "--no-time",
@@ -1893,6 +1900,7 @@ mod tests {
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(!disabled.debug);
     assert!(!disabled.quiet);
+    assert!(!disabled.numlock);
     assert!(!disabled.mock);
     assert!(!disabled.issue);
     assert!(!disabled.time);
@@ -1917,18 +1925,27 @@ mod tests {
     let disabled_file = dir.path().join("disabled.toml");
     write(
       &disabled_file,
-      "[general]\ndebug = false\nquiet = false\nmock = false\n\
+      "[general]\ndebug = false\nquiet = false\nnumlock = false\nmock = false\n\
        [display]\nissue = false\ntime = false\n\
        [power]\nsetsid = true\n",
     );
     let (enabled, warnings) = load_paths(
       Some(&disabled_file),
       None,
-      &matches(&["--debug", "--quiet", "--mock", "--issue", "--time", "--power-no-setsid"]),
+      &matches(&[
+        "--debug",
+        "--quiet",
+        "--numlock",
+        "--mock",
+        "--issue",
+        "--time",
+        "--power-no-setsid",
+      ]),
     );
     assert!(warnings.is_empty(), "{warnings:?}");
     assert!(enabled.debug);
     assert!(enabled.quiet);
+    assert!(enabled.numlock);
     assert!(enabled.mock);
     assert!(enabled.issue);
     assert!(enabled.time);
@@ -2677,6 +2694,7 @@ mod tests {
       logfile: "/tmp/tuigreet.log".into(),
       ipc_timeout: 120,
       quiet: false,
+      numlock: false,
       command: Some("sway".into()),
       allow_command_editor: false,
       environment: vec!["XDG_CURRENT_DESKTOP=sway".into()],

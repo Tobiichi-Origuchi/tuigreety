@@ -70,6 +70,12 @@ async fn main() -> ExitCode {
       return ExitCode::FAILURE;
     },
   };
+  if greeter.settings.numlock
+    && !greeter.mock
+    && let Err(error) = info::enable_numlock()
+  {
+    eprintln!("tuigreet: warning: could not enable Num Lock: {error}");
+  }
   let backend = CrosstermBackend::new(io::stdout());
   let events = Events::new().await;
   events.set_refresh_rate(greeter.refresh_rate);

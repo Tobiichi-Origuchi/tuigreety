@@ -36,6 +36,13 @@ tuigreet - A graphical console greeter for greetd
 *--no-quiet*
 	Keep launched session output, overriding the configuration file.
 
+*--numlock*
+	Enable Num Lock before showing the login prompt. Failure is nonfatal. This
+	setting requires a restart and is ignored in mock mode.
+
+*--no-numlock*
+	Preserve the current Num Lock state, overriding the configuration file.
+
 *-d, --debug [FILE]*
 	Enables debug logging to the provided FILE path, or to /tmp/tuigreet.log if no
 	file is specified. Logs are appended with mode 0600. FILE must be a regular

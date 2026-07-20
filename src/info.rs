@@ -18,6 +18,7 @@ use utmp_rs::{UtmpEntry, UtmpParser};
 use uzers::os::unix::UserExt;
 
 nix::ioctl_read_bad!(get_keyboard_led_flags, 0x4B64, u8);
+nix::ioctl_write_int_bad!(set_keyboard_led_flags, 0x4B65);
 
 use crate::{
   desktop_entry::{parse_exec, shell_join},
@@ -686,6 +687,25 @@ pub fn capslock_status() -> bool {
   result.is_ok() && capslock_is_on(flags)
 }
 
+pub fn enable_numlock() -> io::Result<()> {
+  let fd = io::stdin().as_raw_fd();
+  let mut flags = 0;
+  // SAFETY: KDGKBLED writes one byte to `flags`; KDSKBLED consumes the
+  // resulting integer value. Both ioctls operate synchronously on the live
+  // console descriptor and neither retains a pointer.
+  unsafe {
+    get_keyboard_led_flags(fd, &mut flags).map_err(io::Error::from)?;
+    set_keyboard_led_flags(fd, numlock_flags(flags).into()).map_err(io::Error::from)?;
+  }
+  Ok(())
+}
+
+fn numlock_flags(flags: u8) -> u8 {
+  const LED_NUM: u8 = 0x02;
+
+  flags | LED_NUM | (LED_NUM << 4)
+}
+
 fn capslock_is_on(flags: u8) -> bool {
   const LED_CAP: u8 = 0x04;
 
@@ -694,7 +714,7 @@ fn capslock_is_on(flags: u8) -> bool {
 
 #[cfg(test)]
 mod capslock_tests {
-  use super::capslock_is_on;
+  use super::{capslock_is_on, numlock_flags};
 
   #[test]
   fn reads_the_current_capslock_bit_only() {
@@ -702,6 +722,13 @@ mod capslock_tests {
     assert!(capslock_is_on(0x07));
     assert!(!capslock_is_on(0x00));
     assert!(!capslock_is_on(0x40));
+  }
+
+  #[test]
+  fn enables_current_and_default_numlock_without_clearing_other_flags() {
+    assert_eq!(numlock_flags(0x00), 0x22);
+    assert_eq!(numlock_flags(0x55), 0x77);
+    assert_eq!(numlock_flags(0xff), 0xff);
   }
 }
 

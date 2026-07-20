@@ -17,6 +17,8 @@
 # ipc-timeout = 120
 # Discard standard output and error from the session launched after login.
 # quiet = false
+# Enable Num Lock before drawing the login prompt. A reload cannot change it.
+# numlock = false
 # Run without greetd for UI testing. Requires a restart.
 # mock = false
 

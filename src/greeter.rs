@@ -537,6 +537,12 @@ impl ReloadPlan {
       ));
       settings.mock = snapshot.mock;
     }
+    if settings.numlock != snapshot.settings.numlock {
+      warnings.push(Diagnostic::warning(
+        "general.numlock requires a restart; keeping its current value",
+      ));
+      settings.numlock = snapshot.settings.numlock;
+    }
 
     let users_changed = settings.user_menu != snapshot.settings.user_menu
       || settings.user_autocomplete != snapshot.settings.user_autocomplete
@@ -911,6 +917,8 @@ impl Greeter {
     );
     opts.optflag("q", "quiet", "discard output from the launched session");
     opts.optflag("", "no-quiet", "keep launched session output, overriding configuration");
+    opts.optflag("", "numlock", "enable Num Lock before showing the login prompt");
+    opts.optflag("", "no-numlock", "preserve the current Num Lock state");
     opts.optflagopt(
       "d",
       "debug",
@@ -2064,6 +2072,7 @@ mod test {
       debug: false,
       logfile: "/tmp/reloaded.log".into(),
       mock: false,
+      numlock: true,
       time: true,
       refresh_rate: 60,
       asterisks: true,
@@ -2076,10 +2085,11 @@ mod test {
     let plan = ReloadPlan::prepare(greeter.reload_snapshot(), settings);
     let applied = greeter.apply_reload(plan);
 
-    assert_eq!(applied.warnings.len(), 2);
+    assert_eq!(applied.warnings.len(), 3);
     assert!(greeter.debug);
     assert_eq!(greeter.logfile, "/tmp/original.log");
     assert!(greeter.mock);
+    assert!(!greeter.settings.numlock);
     assert!(!greeter.allow_command_editor);
     assert_eq!(greeter.mode, Mode::Username);
     assert_eq!(greeter.buffer, "password buffer");
