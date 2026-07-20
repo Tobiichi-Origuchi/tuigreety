@@ -4,7 +4,7 @@ use std::{
   fmt::{self, Display},
   path::{Path, PathBuf},
   process::ExitCode,
-  sync::Arc,
+  sync::{Arc, LazyLock},
 };
 
 use getopts::{Matches, Options};
@@ -16,7 +16,7 @@ use crate::{
   cache::{CacheLoad, CacheState, CacheStore, RememberedSelection},
   config::{self, Diagnostic, Settings},
   event::DEFAULT_REFRESH_RATE,
-  info::{get_issue, get_sessions, get_users, session_paths},
+  info::{get_hostname, get_issue, get_sessions, get_users, session_paths},
   ipc::AuthState,
   power::{CommandLine, PowerOption},
   text::Text,
@@ -29,12 +29,14 @@ use crate::{
     power::Power,
     sessions::{Session, SessionSource, SessionType},
     users::User,
+    util::GreetingRender,
   },
 };
 
 // `startx` wants an absolute path to the executable as a first argument.
 // We don't want to resolve the session command in the greeter though, so it should be additionally wrapped with a known noop command (like `/usr/bin/env`).
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
+static HOSTNAME: LazyLock<String> = LazyLock::new(get_hostname);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum OptionArgument {
@@ -381,6 +383,11 @@ pub struct Greeter {
   pub refresh_rate: u16,
   // Greeting message (MOTD) to use to welcome the user.
   pub greeting: Option<String>,
+  pub(crate) greeting_render: Option<GreetingRender>,
+  pub(crate) container_title: Option<String>,
+  pub(crate) status_command_key: String,
+  pub(crate) status_sessions_key: String,
+  pub(crate) status_power_key: String,
   // Transaction message to show to the user.
   pub message: Option<String>,
   // Non-secret, transient feedback from the local input editor.
@@ -408,7 +415,7 @@ pub struct Greeter {
 
 impl Default for Greeter {
   fn default() -> Self {
-    Self {
+    let mut greeter = Self {
       debug: false,
       logfile: String::new(),
       logger: None,
@@ -449,6 +456,11 @@ impl Default for Greeter {
       battery_info: None,
       refresh_rate: DEFAULT_REFRESH_RATE,
       greeting: None,
+      greeting_render: None,
+      container_title: None,
+      status_command_key: String::new(),
+      status_sessions_key: String::new(),
+      status_power_key: String::new(),
       message: None,
       input_warning: None,
       config_notice: None,
@@ -460,7 +472,9 @@ impl Default for Greeter {
       kb_power: 12,
       auth_state: AuthState::Idle,
       exit: None,
-    }
+    };
+    greeter.refresh_render_cache();
+    greeter
   }
 }
 
@@ -898,6 +912,27 @@ impl Greeter {
     }
   }
 
+  pub(crate) fn refresh_render_cache(&mut self) {
+    self.container_title = match &self.settings.container_title {
+      config::ContainerTitle::Hostname => Some(self.text.authenticate_title(&HOSTNAME)),
+      config::ContainerTitle::Custom(title) => Some(title.clone()),
+      config::ContainerTitle::Hidden => None,
+    }
+    .map(|title| crate::ui::util::titleize(&title));
+    self.greeting_render = self
+      .greeting
+      .as_deref()
+      .map(|greeting| GreetingRender::new(greeting, self.greet_align(), &self.theme));
+    self.status_command_key = format!("F{}", self.kb_command);
+    self.status_sessions_key = format!("F{}", self.kb_sessions);
+    self.status_power_key = format!("F{}", self.kb_power);
+  }
+
+  pub(crate) fn set_greeting(&mut self, greeting: Option<String>) {
+    self.greeting = greeting;
+    self.refresh_render_cache();
+  }
+
   pub(crate) fn options() -> CliOptions {
     let mut opts = CliOptions::new();
 
@@ -1175,7 +1210,6 @@ impl Greeter {
     self.remember_session = settings.remember_session;
     self.remember_user_session = settings.remember_user_session;
     self.allow_command_editor = settings.allow_command_editor;
-    self.greeting = settings.greeting.clone();
 
     // If the `--cmd` argument is provided, it will override the selected session.
     if let Some(command) = settings.command.clone() {
@@ -1186,9 +1220,12 @@ impl Greeter {
     self.session_paths = session_paths(&settings.sessions, &settings.xsessions);
     self.session_wrapper = settings.session_wrapper.clone();
     self.xsession_wrapper = settings.xsession_wrapper.clone();
-    if settings.issue {
-      self.greeting = tokio::task::spawn_blocking(get_issue).await.unwrap_or_default();
-    }
+    let greeting = if settings.issue {
+      tokio::task::spawn_blocking(get_issue).await.unwrap_or_default()
+    } else {
+      settings.greeting.clone()
+    };
+    self.set_greeting(greeting);
 
     self.powers.options = build_power_options(&self.text, &settings);
 
@@ -1197,6 +1234,7 @@ impl Greeter {
     self.kb_command = settings.kb_command;
     self.kb_sessions = settings.kb_sessions;
     self.kb_power = settings.kb_power;
+    self.refresh_render_cache();
   }
 
   pub(crate) fn reload_snapshot(&self) -> ReloadSnapshot {
@@ -1347,6 +1385,7 @@ impl Greeter {
     self.kb_sessions = settings.kb_sessions;
     self.kb_power = settings.kb_power;
     self.settings = settings;
+    self.refresh_render_cache();
     self.normalize_derived_state();
 
     // A reload may remove the final usable command while PAM is still in

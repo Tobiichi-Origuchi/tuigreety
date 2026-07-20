@@ -6,7 +6,7 @@ mod processing;
 mod prompt;
 pub mod sessions;
 pub mod users;
-mod util;
+pub(crate) mod util;
 
 use std::{borrow::Cow, error::Error, sync::Arc};
 
@@ -22,7 +22,7 @@ use ratatui::{
 };
 use sessions::SessionSource;
 use tokio::sync::RwLock;
-use util::{buttonize, inset};
+use util::inset;
 
 use self::common::style::{Theme, Themed};
 use crate::{
@@ -54,7 +54,11 @@ where
   // Backend size discovery can perform terminal I/O. Keep it outside the
   // Greeter lock just like the buffer flush below.
   terminal.autoresize()?;
-  let capslock = capslock_status();
+  let sample_capslock = {
+    let greeter = greeter.read().await;
+    greeter.settings.status_caps_lock && greeter.settings.status_position != WidgetPosition::Hidden
+  };
+  let capslock = sample_capslock && capslock_status();
 
   let greeter = greeter.read().await;
   let hide_cursor = should_hide_cursor(&greeter);
@@ -134,7 +138,7 @@ fn render_info_row(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, show_ti
   let time = show_time.then(|| get_time(greeter));
   if let Some(time) = &time {
     frame.render_widget(
-      Paragraph::new(Span::from(time.clone()))
+      Paragraph::new(Span::from(time.as_str()))
         .alignment(Alignment::Center)
         .style(theme.of(&[Themed::Time])),
       area,
@@ -182,16 +186,18 @@ fn info_items_fit(width: u16, time: Option<&str>, battery: &str, position: Horiz
   }
 }
 
-struct StatusEntry {
-  spans: Vec<Span<'static>>,
+struct StatusEntry<'a> {
+  spans: Vec<Span<'a>>,
   width: usize,
   priority: u8,
 }
 
-fn status_entry(label: Span<'static>, value: Span<'static>, priority: u8) -> StatusEntry {
-  let width = input::width(label.content.as_ref()).saturating_add(input::width(value.content.as_ref()));
+fn status_entry<'a>(label: Span<'a>, value: Span<'a>, priority: u8) -> StatusEntry<'a> {
+  let width = input::width(label.content.as_ref())
+    .saturating_add(1)
+    .saturating_add(input::width(value.content.as_ref()));
   StatusEntry {
-    spans: vec![label, value],
+    spans: vec![label, Span::from(" "), value],
     width,
     priority,
   }
@@ -200,8 +206,8 @@ fn status_entry(label: Span<'static>, value: Span<'static>, priority: u8) -> Sta
 fn render_status(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, capslock: bool) {
   let theme = &greeter.theme;
   let caps = (capslock && greeter.settings.status_caps_lock).then(|| {
-    let label = text!(greeter, status_caps);
-    let width = input::width(&label);
+    let label = greeter.text.status_caps.as_str();
+    let width = input::width(label);
     (status_label(theme, label), width)
   });
   let caps = caps.filter(|(_, width)| *width <= usize::from(area.width));
@@ -213,35 +219,35 @@ fn render_status(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, capslock:
   if greeter.settings.status_reset {
     entries.push(status_entry(
       status_label(theme, "ESC"),
-      status_value(greeter, theme, Button::Other, text!(greeter, action_reset)),
+      status_value(greeter, theme, Button::Other, &greeter.text.action_reset),
       0,
     ));
   }
   if greeter.settings.status_command && greeter.allow_command_editor {
     entries.push(status_entry(
-      status_label(theme, format!("F{}", greeter.kb_command)),
-      status_value(greeter, theme, Button::Command, text!(greeter, action_command)),
+      status_label(theme, greeter.status_command_key.as_str()),
+      status_value(greeter, theme, Button::Command, &greeter.text.action_command),
       3,
     ));
   }
   if greeter.settings.status_sessions {
     entries.push(status_entry(
-      status_label(theme, format!("F{}", greeter.kb_sessions)),
-      status_value(greeter, theme, Button::Session, text!(greeter, action_session)),
+      status_label(theme, greeter.status_sessions_key.as_str()),
+      status_value(greeter, theme, Button::Session, &greeter.text.action_session),
       1,
     ));
   }
   if greeter.settings.status_power && !greeter.powers.options.is_empty() {
     entries.push(status_entry(
-      status_label(theme, format!("F{}", greeter.kb_power)),
-      status_value(greeter, theme, Button::Power, text!(greeter, action_power)),
+      status_label(theme, greeter.status_power_key.as_str()),
+      status_value(greeter, theme, Button::Power, &greeter.text.action_power),
       2,
     ));
   }
   if greeter.settings.status_selection {
     let label = match greeter.session_source {
-      SessionSource::Session(_) => text!(greeter, status_session),
-      _ => text!(greeter, status_command),
+      SessionSource::Session(_) => greeter.text.status_session.as_str(),
+      _ => greeter.text.status_command.as_str(),
     };
     entries.push(status_entry(
       status_label(theme, label),
@@ -287,7 +293,7 @@ fn render_status(greeter: &Greeter, frame: &mut Frame<'_>, area: Rect, capslock:
   }
 }
 
-fn select_status_entries(entries: &[StatusEntry], available: usize) -> Vec<bool> {
+fn select_status_entries(entries: &[StatusEntry<'_>], available: usize) -> Vec<bool> {
   let mut order = (0..entries.len()).collect::<Vec<_>>();
   order.sort_by_key(|index| (entries[*index].priority, *index));
   let mut selected = vec![false; entries.len()];
@@ -322,35 +328,26 @@ fn draw_cursor(buffer: &mut Buffer, cursor: Option<(u16, u16)>, visible: bool) {
 }
 
 fn get_time(greeter: &Greeter) -> String {
-  let format = match &greeter.time_format {
-    Some(format) => Cow::Borrowed(format),
-    None => Cow::Owned(text!(greeter, date)),
-  };
+  let format = greeter.time_format.as_deref().unwrap_or(&greeter.text.date);
 
-  Local::now().format(&format).to_string()
+  Local::now().format(format).to_string()
 }
 
 fn status_label<'s, S>(theme: &Theme, text: S) -> Span<'s>
 where
-  S: Into<String>,
+  S: Into<Cow<'s, str>>,
 {
-  Span::styled(
-    text.into(),
-    theme.of(&[Themed::ActionButton]).add_modifier(Modifier::REVERSED),
-  )
+  Span::styled(text, theme.of(&[Themed::ActionButton]).add_modifier(Modifier::REVERSED))
 }
 
-fn status_value<'s, S>(greeter: &Greeter, theme: &Theme, button: Button, text: S) -> Span<'s>
-where
-  S: Into<String>,
-{
+fn status_value<'s>(greeter: &Greeter, theme: &Theme, button: Button, text: &'s str) -> Span<'s> {
   let relevant_mode = match button {
     Button::Command => Mode::Command,
     Button::Session => Mode::Sessions,
     Button::Power => Mode::Power,
 
     _ => {
-      return Span::from(buttonize(&text.into())).style(theme.of(&[Themed::Action]));
+      return Span::from(text).style(theme.of(&[Themed::Action]));
     },
   };
 
@@ -359,7 +356,7 @@ where
     false => theme.of(&[Themed::Action]),
   };
 
-  Span::from(buttonize(&text.into())).style(style)
+  Span::from(text).style(style)
 }
 
 fn prompt_value<'s>(theme: &Theme, text: Option<&'s str>) -> Span<'s> {
@@ -523,7 +520,7 @@ mod tests {
           greeter.settings.container_padding = container_padding;
           greeter.settings.prompt_padding = prompt_padding;
           greeter.time = true;
-          greeter.greeting = Some("欢迎 e\u{301} 👩‍💻".into());
+          greeter.set_greeting(Some("欢迎 e\u{301} 👩‍💻".into()));
           greeter.message = Some("A wrapped message".into());
           greeter.username.value = "用户".into();
           greeter.username_cursor = greeter.username.value.len();
@@ -573,7 +570,7 @@ mod tests {
     let mut greeter = Greeter::default();
     greeter.username.value = "alice".into();
     greeter.username_cursor = greeter.username.value.len();
-    greeter.greeting = Some("RESIZE-MARKER".into());
+    greeter.set_greeting(Some("RESIZE-MARKER".into()));
     let greeter = Arc::new(RwLock::new(greeter));
     let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
 
@@ -624,7 +621,11 @@ mod tests {
     let greeter = Arc::new(RwLock::new(Greeter::default()));
     let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
 
-    greeter.write().await.settings.container_title = crate::config::ContainerTitle::Custom("Custom login".into());
+    {
+      let mut state = greeter.write().await;
+      state.settings.container_title = crate::config::ContainerTitle::Custom("Custom login".into());
+      state.refresh_render_cache();
+    }
     draw(greeter.clone(), &mut terminal, false).await.unwrap();
     let rendered = terminal
       .backend()
@@ -635,7 +636,11 @@ mod tests {
       .collect::<String>();
     assert!(rendered.contains("Custom login"));
 
-    greeter.write().await.settings.container_title = crate::config::ContainerTitle::Hidden;
+    {
+      let mut state = greeter.write().await;
+      state.settings.container_title = crate::config::ContainerTitle::Hidden;
+      state.refresh_render_cache();
+    }
     draw(greeter, &mut terminal, false).await.unwrap();
     let rendered = terminal
       .backend()
@@ -653,7 +658,7 @@ mod tests {
     let mut greeter = Greeter::default();
     greeter.settings.width = 50;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("CachyOS 7.1.4-1-cachyos (tty1)\n\n".into());
+    greeter.set_greeting(Some("CachyOS 7.1.4-1-cachyos (tty1)\n\n".into()));
     let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
 
     draw(Arc::new(RwLock::new(greeter)), &mut terminal, false)

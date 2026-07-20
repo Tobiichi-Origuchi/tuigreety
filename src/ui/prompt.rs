@@ -1,4 +1,4 @@
-use std::{borrow::Cow, sync::LazyLock};
+use std::borrow::Cow;
 
 use ratatui::{
   layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -10,20 +10,15 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::common::style::Themed;
 use crate::{
-  GreetAlign,
   Greeter,
   Mode,
   SecretDisplay,
-  config::ContainerTitle,
-  info::get_hostname,
   ui::{Frame, input, prompt_value, util::*},
 };
 
 const GREETING_INDEX: usize = 0;
 const USERNAME_INDEX: usize = 1;
 const ANSWER_INDEX: usize = 3;
-
-static HOSTNAME: LazyLock<String> = LazyLock::new(get_hostname);
 
 fn mask_secret(pool: &str, length: usize) -> String {
   pool.graphemes(true).cycle().take(length).collect()
@@ -55,12 +50,6 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
   let (message, message_height) = get_message_height(visible_message, width);
   let feedback = feedback_layout(area, width, container_height, minimum_container_height, message_height);
   let container = feedback.container;
-  let greeting_alignment = match greeter.greet_align() {
-    GreetAlign::Center => Alignment::Center,
-    GreetAlign::Left => Alignment::Left,
-    GreetAlign::Right => Alignment::Right,
-  };
-
   let frame = inset(container, container_padding);
 
   let mut block = Block::default()
@@ -68,15 +57,8 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
     .borders(Borders::ALL)
     .border_type(BorderType::Plain)
     .border_style(theme.of(&[Themed::Border]));
-  let title = match &greeter.settings.container_title {
-    ContainerTitle::Hostname => Some(greeter.text.authenticate_title(&HOSTNAME)),
-    ContainerTitle::Custom(title) => Some(title.clone()),
-    ContainerTitle::Hidden => None,
-  };
-  if let Some(title) = title {
-    block = block
-      .title(Span::from(titleize(&title)))
-      .title_style(theme.of(&[Themed::Title]));
+  if let Some(title) = greeter.container_title.as_deref() {
+    block = block.title(Span::from(title)).title_style(theme.of(&[Themed::Title]));
   }
 
   f.render_widget(block, container);
@@ -104,9 +86,7 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
     .constraints(constraints.as_ref())
     .split(frame);
   if let Some(greeting) = greeting {
-    let greeting_label = greeting.alignment(greeting_alignment).style(theme.of(&[Themed::Greet]));
-
-    f.render_widget(greeting_label, chunks[GREETING_INDEX]);
+    f.render_widget(greeting, chunks[GREETING_INDEX]);
   }
 
   let username_label = if greeter.user_menu && greeter.username.value.is_empty() {

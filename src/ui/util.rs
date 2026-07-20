@@ -1,18 +1,73 @@
+use std::borrow::Cow;
+
 use ansi_to_tui::IntoText;
 use ratatui::{
-  prelude::Rect,
-  text::Text,
+  layout::{Alignment, Rect},
+  text::{Line, Span, Text},
   widgets::{Paragraph, Wrap},
 };
 
-use crate::{Greeter, Mode, ui::input};
+use crate::{
+  GreetAlign,
+  Greeter,
+  Mode,
+  ui::{
+    common::style::{Theme, Themed},
+    input,
+  },
+};
 
 pub fn titleize(message: &str) -> String {
   format!(" {message} ")
 }
 
-pub fn buttonize(message: &str) -> String {
-  format!(" {message}")
+pub(crate) struct GreetingRender {
+  paragraph: Paragraph<'static>,
+  trailing_blank_line: bool,
+}
+
+impl GreetingRender {
+  pub(crate) fn new(greeting: &str, alignment: GreetAlign, theme: &Theme) -> Self {
+    let text = greeting
+      .to_text()
+      .map(owned_text)
+      .unwrap_or_else(|_| Text::raw(greeting.to_string()));
+    let alignment = match alignment {
+      GreetAlign::Center => Alignment::Center,
+      GreetAlign::Left => Alignment::Left,
+      GreetAlign::Right => Alignment::Right,
+    };
+    Self {
+      paragraph: Paragraph::new(text)
+        .wrap(Wrap { trim: false })
+        .alignment(alignment)
+        .style(theme.of(&[Themed::Greet])),
+      trailing_blank_line: has_trailing_blank_line(greeting),
+    }
+  }
+}
+
+fn owned_text(text: Text<'_>) -> Text<'static> {
+  Text {
+    alignment: text.alignment,
+    style: text.style,
+    lines: text
+      .lines
+      .into_iter()
+      .map(|line| Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line
+          .spans
+          .into_iter()
+          .map(|span| Span {
+            style: span.style,
+            content: Cow::Owned(span.content.into_owned()),
+          })
+          .collect(),
+      })
+      .collect(),
+  }
 }
 
 // Determinew whether the cursor should be shown or hidden from the current
@@ -159,21 +214,16 @@ pub fn input_area(area: Rect, label: &str) -> Rect {
   )
 }
 
-pub fn get_greeting_height(greeter: &Greeter, width: u16, fallback: u16) -> (Option<Paragraph<'_>>, u16) {
-  if let Some(greeting) = &greeter.greeting {
-    let text = match greeting.to_text() {
-      Ok(text) => text,
-      Err(_) => Text::raw(greeting),
-    };
-
-    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+pub fn get_greeting_height(greeter: &Greeter, width: u16, fallback: u16) -> (Option<&Paragraph<'static>>, u16) {
+  if let Some(greeting) = &greeter.greeting_render {
+    let paragraph = &greeting.paragraph;
     if width == 0 {
       return (Some(paragraph), 0);
     }
     // Reserve one visual separator below ordinary greeting text. Traditional
     // issue files already end in a blank line (`...\n\n`), so adding another
     // row here would double-space the username prompt.
-    let separator = u16::from(!has_trailing_blank_line(greeting));
+    let separator = u16::from(!greeting.trailing_blank_line);
     let height = paragraph.line_count(width).saturating_add(usize::from(separator));
 
     (Some(paragraph), u16::try_from(height).unwrap_or(u16::MAX))
@@ -208,7 +258,7 @@ pub fn get_message_height(message: Option<&str>, width: u16) -> (Option<Paragrap
 #[cfg(test)]
 mod test {
   use ratatui::{
-    prelude::Rect,
+    layout::{Alignment, Rect},
     style::{Color, Style},
     text::{Line, Span, Text},
     widgets::{Paragraph, Wrap},
@@ -218,7 +268,10 @@ mod test {
   use crate::{
     Greeter,
     Mode,
-    ui::util::{get_greeting_height, get_height},
+    ui::{
+      common::style::Themed,
+      util::{get_greeting_height, get_height},
+    },
   };
 
   fn container_height(greeter: &Greeter) -> u16 {
@@ -265,7 +318,7 @@ mod test {
   fn test_container_height_username_greeting_padding_one() {
     let mut greeter = Greeter::default();
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("Hello".into());
+    greeter.set_greeting(Some("Hello".into()));
     greeter.mode = Mode::Username;
 
     assert_eq!(container_height(&greeter), 7);
@@ -284,7 +337,7 @@ mod test {
   fn test_container_height_password_greeting_padding_one_prompt_padding_1() {
     let mut greeter = Greeter::default();
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("Hello".into());
+    greeter.set_greeting(Some("Hello".into()));
     greeter.mode = Mode::Password;
     greeter.prompt = Some("Password:".into());
 
@@ -304,7 +357,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.container_padding = 1;
     greeter.settings.prompt_padding = 0;
-    greeter.greeting = Some("Hello".into());
+    greeter.set_greeting(Some("Hello".into()));
     greeter.mode = Mode::Password;
     greeter.prompt = Some("Password:".into());
 
@@ -410,7 +463,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 15;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("Hello World".into());
+    greeter.set_greeting(Some("Hello World".into()));
 
     let (_, height) = get_greeting_height(&greeter, 13, 0);
 
@@ -422,7 +475,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 8;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("Hello World".into());
+    greeter.set_greeting(Some("Hello World".into()));
 
     let (_, height) = get_greeting_height(&greeter, 6, 0);
 
@@ -434,7 +487,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 15;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("\x1b[31mHello\x1b[0m World".into());
+    greeter.set_greeting(Some("\x1b[31mHello\x1b[0m World".into()));
 
     let (text, height) = get_greeting_height(&greeter, 13, 0);
 
@@ -442,9 +495,11 @@ mod test {
       Span::styled("Hello", Style::default().fg(Color::Red)),
       Span::styled(" World", Style::reset()),
     ])]))
-    .wrap(Wrap { trim: false });
+    .wrap(Wrap { trim: false })
+    .alignment(Alignment::Center)
+    .style(greeter.theme.of(&[Themed::Greet]));
 
-    assert_eq!(text, Some(expected));
+    assert_eq!(text, Some(&expected));
     assert_eq!(height, 2);
   }
 
@@ -453,7 +508,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 8;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("\x1b[31mHello\x1b[0m World".into());
+    greeter.set_greeting(Some("\x1b[31mHello\x1b[0m World".into()));
 
     let (text, height) = get_greeting_height(&greeter, 6, 0);
 
@@ -461,9 +516,11 @@ mod test {
       Span::styled("Hello", Style::default().fg(Color::Red)),
       Span::styled(" World", Style::reset()),
     ])]))
-    .wrap(Wrap { trim: false });
+    .wrap(Wrap { trim: false })
+    .alignment(Alignment::Center)
+    .style(greeter.theme.of(&[Themed::Greet]));
 
-    assert_eq!(text, Some(expected));
+    assert_eq!(text, Some(&expected));
     assert_eq!(height, 3);
   }
 
@@ -472,14 +529,16 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 30;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("  Hello     \nWorld    ".into());
+    greeter.set_greeting(Some("  Hello     \nWorld    ".into()));
 
     let (text, height) = get_greeting_height(&greeter, 28, 0);
 
-    let expected =
-      Paragraph::new(Text::from(vec![Line::from("  Hello     "), Line::from("World    ")])).wrap(Wrap { trim: false });
+    let expected = Paragraph::new(Text::from(vec![Line::from("  Hello     "), Line::from("World    ")]))
+      .wrap(Wrap { trim: false })
+      .alignment(Alignment::Center)
+      .style(greeter.theme.of(&[Themed::Greet]));
 
-    assert_eq!(text, Some(expected));
+    assert_eq!(text, Some(&expected));
     assert_eq!(height, 3);
   }
 
@@ -488,7 +547,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 40;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("CachyOS 7.1.4-1-cachyos (tty1)\n\n".into());
+    greeter.set_greeting(Some("CachyOS 7.1.4-1-cachyos (tty1)\n\n".into()));
 
     let (_, height) = get_greeting_height(&greeter, 38, 0);
 
@@ -500,7 +559,7 @@ mod test {
     let mut greeter = Greeter::default();
     greeter.settings.width = 40;
     greeter.settings.container_padding = 1;
-    greeter.greeting = Some("CachyOS\r\n\r\n".into());
+    greeter.set_greeting(Some("CachyOS\r\n\r\n".into()));
 
     let (_, height) = get_greeting_height(&greeter, 38, 0);
 

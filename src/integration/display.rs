@@ -16,7 +16,7 @@ async fn show_greet() {
   let mut runner = IntegrationRunner::new(
     opts,
     Some(|greeter| {
-      greeter.greeting = Some("Lorem ipsum dolor sit amet".to_string());
+      greeter.set_greeting(Some("Lorem ipsum dolor sit amet".to_string()));
     }),
   )
   .await;
@@ -45,7 +45,7 @@ async fn show_wrapped_greet() {
   let mut runner = IntegrationRunner::new_with_size(
     opts,
     Some(|greeter| {
-      greeter.greeting = Some("Lorem \x1b[31mipsum dolor sit amet".to_string());
+      greeter.set_greeting(Some("Lorem \x1b[31mipsum dolor sit amet".to_string()));
     }),
     (20, 20),
   )
