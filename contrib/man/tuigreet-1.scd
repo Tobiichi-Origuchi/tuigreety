@@ -336,6 +336,26 @@ PAM responses to 4096 bytes, and free-form commands to 16384 bytes. Rejected
 input produces an on-screen warning; configured or discovered values are not
 truncated.
 
+# TERMINAL COMPATIBILITY
+
+Tuigreet renders to the character-cell grid reported by its controlling
+terminal and adopts size changes before drawing. It does not open DRM devices,
+select display connectors, or force a PTY size. Multi-monitor geometry and
+mirroring therefore remain the responsibility of the kernel console or terminal
+emulator; separate per-monitor layouts are not supported.
+
+The standard PTY/ANSI interface and *TERM=kmscon* name exposed by KMSCON are
+supported without adding KMSCON as a dependency. Configure fonts, keyboard,
+GPU, display mode, and multi-monitor policy in KMSCON. Linux-VT Num Lock and
+Caps Lock ioctls may be unavailable in a KMSCON PTY; Num Lock failure is
+nonfatal.
+
+Embedding KMSCON beneath greetd still requires system-specific VT, seat, device
+permission, and service-lifecycle integration. To release KMSCON's GPU before a
+graphical session, use *kmscon-launch-gui* as the generic session wrapper, or
+prepend it to the X11 wrapper. KMSCON documents that this handoff is unavailable
+for another libseat-based GUI when KMSCON itself uses libseat.
+
 # AUTHORS
 
 Maintained by the tuigreet contributors.

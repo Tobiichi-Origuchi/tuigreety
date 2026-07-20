@@ -267,6 +267,16 @@ user = "greeter"
 
 Please refer to [greetd's wiki](https://man.sr.ht/~kennylevinsen/greetd/) for more information on setting up `greetd`.
 
+### Terminal and display compatibility
+
+Tuigreety renders only to the character-cell grid reported by its controlling terminal. It re-reads that size before every frame and redraws after terminal resize events; it does not open DRM devices, choose connectors, infer font dimensions, or force a new PTY size. On a multi-monitor console, the kernel console or userspace terminal emulator therefore remains responsible for choosing the shared geometry. Resizing and mirrored displays are supported on a best-effort basis, but separate per-monitor layouts are not a supported feature.
+
+The UI is compatible with the standard PTY and ANSI terminal interface exposed by KMSCON, including its `TERM=kmscon` name; KMSCON is not a Tuigreety dependency. Install KMSCON's own terminfo definition for other applications in the session, and configure fonts, keyboard layout, GPU selection, display mode, and the `clone` or `largest` multi-monitor policy in KMSCON itself.
+
+KMSCON is not a kernel virtual console: the Num Lock startup option and Caps Lock status indicator use Linux VT keyboard ioctls, so they may be unavailable inside KMSCON. Num Lock failure is nonfatal; keyboard state should instead be configured through KMSCON's XKB options.
+
+Running Tuigreety in an already-created KMSCON terminal session is distinct from making greetd launch and supervise KMSCON. The latter still requires distribution-specific VT, seat, device-permission, and service-lifecycle integration and is not claimed as a turnkey Tuigreety setup. When a graphical session is launched from a KMSCON PTY, KMSCON must release the GPU: use `wrapper = "kmscon-launch-gui"` for Wayland sessions or `xsession-wrapper = "kmscon-launch-gui startx /usr/bin/env"` for X11. KMSCON documents that this handoff cannot launch another libseat-based GUI when KMSCON itself is using libseat.
+
 ### Sessions
 
 Sessions are loaded from `.desktop` files below the XDG data directories (`wayland-sessions` and `xsessions`); the usual defaults include `/usr/local/share` and `/usr/share`. Use `--sessions` or `--xsessions` with colon-separated directories to replace the defaults for only that session type.

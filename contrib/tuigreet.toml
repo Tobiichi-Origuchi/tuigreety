@@ -17,7 +17,9 @@
 # ipc-timeout = 120
 # Discard standard output and error from the session launched after login.
 # quiet = false
-# Enable Num Lock before drawing the login prompt. A reload cannot change it.
+# Enable Num Lock through Linux VT ioctls before drawing the login prompt.
+# This may be unavailable in userspace terminals such as KMSCON. Failure is
+# nonfatal, and a reload cannot change it.
 # numlock = false
 # Run without greetd for UI testing. Requires a restart.
 # mock = false

@@ -485,6 +485,34 @@ fn termination_signals_restore_terminal_and_fail_cleanly() {
 }
 
 #[test]
+fn kmscon_term_name_uses_the_standard_pty_path() {
+  let temp = TempDir::new().expect("failed to create process-test directory");
+  let config = temp.path().join("config.toml");
+  write_config(&config, mock_config("PROCESS-KMSCON"));
+
+  let mut process = PtyProcess::spawn(
+    [
+      "--config",
+      config.to_str().expect("non-UTF-8 test path"),
+      "--mock",
+      "--cmd",
+      "mock-session",
+      "--no-xsession-wrapper",
+    ],
+    &[("TERM", OsStr::new("kmscon"))],
+  );
+  process.wait_for_output("Username:");
+  process.assert_terminal_active();
+  process.send(b"alice\r");
+  process.wait_for_output("Password:");
+  process.send(b"anything\r");
+
+  let status = process.wait();
+  assert_eq!(status.code(), Some(0), "output:\n{}", process.output_text());
+  process.assert_terminal_restored();
+}
+
+#[test]
 fn information_actions_need_neither_tty_nor_greetd_socket() {
   let temp = TempDir::new().expect("failed to create process-test directory");
   let config = temp.path().join("config.toml");

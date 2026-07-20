@@ -569,6 +569,26 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn terminal_resize_reflows_to_the_current_backend_area() {
+    let mut greeter = Greeter::default();
+    greeter.username.value = "alice".into();
+    greeter.username_cursor = greeter.username.value.len();
+    greeter.greeting = Some("RESIZE-MARKER".into());
+    let greeter = Arc::new(RwLock::new(greeter));
+    let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+
+    for (width, height) in [(120, 30), (32, 8), (160, 50)] {
+      terminal.backend_mut().resize(width, height);
+      draw(greeter.clone(), &mut terminal, false).await.unwrap();
+
+      let expected = Rect::new(0, 0, width, height);
+      assert_eq!(terminal.get_frame().area(), expected);
+      assert_eq!(terminal.backend().buffer().area, expected);
+      assert!(row_containing(terminal.backend().buffer(), "Username: alice").is_some());
+    }
+  }
+
+  #[tokio::test]
   async fn prompt_and_feedback_are_centered_as_one_visual_block() {
     let mut greeter = Greeter::default();
     greeter.settings.width = 20;
