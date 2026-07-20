@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.11.0 - 2026-07-20
+
+### Added
+
+- [`94fed78`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/94fed78fd5f303d42ddb12e95b2baff8f3033e17) Add exact TOML argv arrays and explicit `false` values for power actions while retaining shell-quoted legacy strings.
+
+### Changed
+
+- [`81c7b33`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/81c7b338ab2aafceceefd98fb4890dff0f639a94) Read Caps Lock directly from the console and keep terminal I/O outside the shared UI lock for smoother rendering.
+- [`55e1de8`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/55e1de867deb2c21787a8baaf44423e138736196) Resolve Wayland and X11 session paths independently and preserve sessions by stable identity across discovery.
+- [`3c3c317`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/3c3c317cbbafcd5f1db5d147fac81661f7b8c843) Move configuration parsing and user/session discovery off the UI lock, serializing and coalescing rapid reloads.
+- [`17536ba`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/17536ba92eaafe6e5827bf93ec3af94bbdeb9491) Replace separate remember files with one versioned, transactional state cache and safe legacy migration.
+- [`0299ba2`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/0299ba2a23fd05b9f7c12c45a07248b1894018c6) Run power commands asynchronously with a visible waiting state, Escape cancellation, a 30-second timeout, and process-group cleanup.
+- [`2209ed5`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/2209ed56b3380eabd6f2b9b008fb5a36a5d9c395) Center prompts and their newest feedback as one responsive block on normal and constrained terminals.
+
+### Fixed
+
+- [`c2fcde0`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/c2fcde07fbdfd3ff90b25ac650bd5c863cb81046) Keep user and session choices stable across unrelated reloads, close invalid menus, and apply deterministic fallbacks when choices disappear.
+- [`bfc4565`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/bfc4565037d436fac10b01ac8b7aada36fd47c47) Surface rejected or failed hot reloads without replacing PAM prompts or other authentication feedback.
+- [`56b02d1`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/56b02d1b7504d5025c14e72f345287f78744700e) Hide disabled power actions and omit suspend or hibernate when no supported runtime manager is available.
+- [`28225d3`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/28225d3cc9c601a36a5ad63f38b65479e85af8f7) Parse command-line arguments once so help, version, and config checking follow the same option semantics without requiring a TTY or greetd.
+- [`a0a3c2e`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/a0a3c2eee22e05c7599af4af431d328eed879e02) Supervise terminal and configuration watcher workers, preventing EOF, errors, or worker failure from causing busy loops or silent stalls.
+- [`648c4c4`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/648c4c49b28b1ed22d8f8a04ae3935463a85a316) Preserve configured environment variables when the default session command is wrapped.
+- [`a9ace20`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/a9ace20500e1914408cdf09d1e35f8ce3d2f0dbe) Reject blank or missing launch sources before authentication and cancel a live transaction if reload removes the final source.
+- [`e780d57`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/e780d57813b3a1b91124807a48e22994142b9e83) Accept valid F-key swaps and cycles atomically while rejecting conflicting keybinding layers.
+- [`da364eb`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/da364eb85aaa80238c1142b755dda7192eab180b) Preserve lower theme layers and make TOML `false` explicitly clear inherited colors.
+- [`31c888c`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/31c888c876bd5b883152f7ab445c050fe6ce42f6) Resolve UID defaults once per configuration revision and reject invalid one-sided range overrides atomically.
+- [`1ac7aef`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/1ac7aefec0880b1988402da7d3e359e423c88bb3) Give startup, config checking, and hot reload consistent source-located diagnostics without making runtime configuration errors fatal.
+- [`b720f0d`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/b720f0d733d8b8a1110ac66e03954bab0d53b0ab) Apply identical, symlinked, or hard-linked system and explicit configuration files only once per revision.
+- [`c71fde6`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/c71fde644c4a19417b813092072d2cb2e8421185) Require a usable greetd connection before terminal or real power interaction while keeping mock and information-only modes socket-independent.
+
+### Security
+
+- [`17536ba`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/17536ba92eaafe6e5827bf93ec3af94bbdeb9491) Harden remembered state against symlinks, hard links, special files, unsafe ownership or modes, oversized data, corruption, and concurrent writers.
+- [`a72377f`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/a72377fbad48cb6d870880aa77c417d4675bf50e) Move and zeroize PAM responses, queued requests, and serialized IPC frames across success, cancellation, failure, and shutdown paths.
+- [`1ac7aef`](https://github.com/Tobiichi-Origuchi/tuigreety/commit/1ac7aefec0880b1988402da7d3e359e423c88bb3) Warn when active configuration is not root-owned or is group/world-writable while preserving fail-open greeter startup.
+
 ## 0.10.3 - 2026-07-18
 
 ### Added
