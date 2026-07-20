@@ -1,8 +1,10 @@
 use std::{
   env,
+  fmt,
   fs,
   io::{self, Write},
   ops::Range,
+  os::unix::fs::MetadataExt,
   path::{Path, PathBuf},
   str::FromStr,
 };
@@ -24,6 +26,176 @@ const DEFAULT_MIN_UID: u32 = 1000;
 const DEFAULT_MAX_UID: u32 = 60000;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Severity {
+  Warning,
+  Error,
+}
+
+impl fmt::Display for Severity {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    formatter.write_str(match self {
+      Self::Warning => "warning",
+      Self::Error => "error",
+    })
+  }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct SourceMarker {
+  line: usize,
+  column: usize,
+  source_line: String,
+  underline_start: usize,
+  underline_width: usize,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum DiagnosticSource {
+  General,
+  CommandLine,
+  File {
+    path: PathBuf,
+    marker: Option<SourceMarker>,
+  },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Diagnostic {
+  severity: Severity,
+  source: DiagnosticSource,
+  field: Option<String>,
+  title: &'static str,
+  message: String,
+}
+
+impl Diagnostic {
+  pub(crate) fn warning(message: impl Into<String>) -> Self {
+    Self {
+      severity: Severity::Warning,
+      source: DiagnosticSource::General,
+      field: None,
+      title: "configuration warning",
+      message: message.into(),
+    }
+  }
+
+  fn command_line(field: Option<&str>, message: impl Into<String>) -> Self {
+    Self {
+      severity: Severity::Warning,
+      source: DiagnosticSource::CommandLine,
+      field: field.map(str::to_string),
+      title: "invalid command-line configuration",
+      message: message.into(),
+    }
+  }
+
+  fn file(
+    severity: Severity,
+    title: &'static str,
+    path: &Path,
+    source: Option<&str>,
+    span: Option<Range<usize>>,
+    field: Option<&str>,
+    message: impl Into<String>,
+  ) -> Self {
+    Self {
+      severity,
+      source: DiagnosticSource::File {
+        path: path.to_path_buf(),
+        marker: source.zip(span).map(|(source, span)| source_marker(source, span)),
+      },
+      field: field.map(str::to_string),
+      title,
+      message: message.into(),
+    }
+  }
+
+  #[cfg(test)]
+  fn contains(&self, needle: &str) -> bool {
+    self.to_string().contains(needle)
+  }
+}
+
+impl fmt::Display for Diagnostic {
+  fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    match &self.source {
+      DiagnosticSource::General => write!(formatter, "{}: {}", self.severity, self.message),
+      DiagnosticSource::CommandLine => {
+        write!(formatter, "{}: command line", self.severity)?;
+        if let Some(field) = &self.field {
+          write!(formatter, " ({field})")?;
+        }
+        write!(formatter, ": {}", self.message)
+      },
+      DiagnosticSource::File { path, marker } => {
+        write!(formatter, "{}: {}", self.severity, self.title)?;
+        if let Some(field) = &self.field {
+          write!(formatter, " for `{field}`")?;
+        }
+        if let Some(marker) = marker {
+          let gutter = marker.line.to_string().len();
+          write!(
+            formatter,
+            "\n{space:>gutter$}--> {path}:{line}:{column}\n{space:>gutter$} |\n{line:>gutter$} | {source_line}\n{space:>gutter$} | {padding}{carets} {message}",
+            space = "",
+            path = path.display(),
+            line = marker.line,
+            column = marker.column,
+            source_line = marker.source_line,
+            padding = " ".repeat(marker.underline_start),
+            carets = "^".repeat(marker.underline_width),
+            message = self.message,
+          )
+        } else {
+          write!(formatter, "\n  --> {}\n   = {}", path.display(), self.message)
+        }
+      },
+    }
+  }
+}
+
+#[derive(Clone, Copy)]
+enum LayerContext<'a> {
+  CommandLine,
+  File { path: &'a Path, source: &'a str },
+}
+
+impl LayerContext<'_> {
+  fn warning(self, span: Option<Range<usize>>, field: Option<&str>, message: impl Into<String>) -> Diagnostic {
+    match self {
+      Self::CommandLine => Diagnostic::command_line(field, message),
+      Self::File { path, source } => Diagnostic::file(
+        Severity::Warning,
+        "invalid configuration",
+        path,
+        Some(source),
+        span,
+        field,
+        message,
+      ),
+    }
+  }
+}
+
+fn source_marker(source: &str, span: Range<usize>) -> SourceMarker {
+  let offset = span.start.min(source.len());
+  let (line, column) = line_column(source, offset);
+  let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+  let line_end = source[offset..].find('\n').map_or(source.len(), |index| offset + index);
+  let underline_start = source[line_start..offset].chars().count();
+  let underline_end = span.end.min(line_end);
+  let underline_width = source[offset..underline_end].chars().count().max(1);
+
+  SourceMarker {
+    line,
+    column,
+    source_line: source[line_start..line_end].to_string(),
+    underline_start,
+    underline_width,
+  }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settings {
@@ -127,6 +299,7 @@ impl Settings {
 
 #[derive(Default)]
 struct Layer {
+  spans: LayerSpans,
   debug: Option<bool>,
   logfile: Option<String>,
   ipc_timeout: Option<u16>,
@@ -169,6 +342,14 @@ struct Layer {
 }
 
 #[derive(Default)]
+struct LayerSpans {
+  display_identity: Option<Range<usize>>,
+  uid_range: Option<Range<usize>>,
+  remember_sessions: Option<Range<usize>>,
+  keybindings: Option<Range<usize>>,
+}
+
+#[derive(Default)]
 struct ThemeLayer {
   border: Option<ThemeColor>,
   text: Option<ThemeColor>,
@@ -182,41 +363,61 @@ struct ThemeLayer {
   button: Option<ThemeColor>,
 }
 
-pub(crate) fn load_from(system: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
+pub(crate) fn load_from(system: Option<&Path>, matches: &Matches) -> (Settings, Vec<Diagnostic>) {
   let explicit = matches.opt_str("config").map(PathBuf::from);
-  load_paths(system, explicit.as_deref(), matches)
+  load_paths_core(
+    system,
+    explicit.as_deref(),
+    matches,
+    read_uid_defaults(Path::new(LOGIN_DEFS)),
+    true,
+  )
 }
 
-pub fn reload(matches: &Matches) -> Result<(Settings, Vec<String>), Vec<String>> {
+pub fn reload(matches: &Matches) -> Result<(Settings, Vec<Diagnostic>), Vec<Diagnostic>> {
   let explicit = matches.opt_str("config").map(PathBuf::from);
-  reload_paths(Path::new(SYSTEM_CONFIG), explicit.as_deref(), matches)
+  reload_paths_core(
+    Path::new(SYSTEM_CONFIG),
+    explicit.as_deref(),
+    matches,
+    read_uid_defaults(Path::new(LOGIN_DEFS)),
+    true,
+  )
 }
 
+#[cfg(test)]
 fn reload_paths(
   system: &Path,
   explicit: Option<&Path>,
   matches: &Matches,
-) -> Result<(Settings, Vec<String>), Vec<String>> {
-  reload_paths_with_uid_defaults(system, explicit, matches, read_uid_defaults(Path::new(LOGIN_DEFS)))
+) -> Result<(Settings, Vec<Diagnostic>), Vec<Diagnostic>> {
+  reload_paths_core(
+    system,
+    explicit,
+    matches,
+    read_uid_defaults(Path::new(LOGIN_DEFS)),
+    false,
+  )
 }
 
-fn reload_paths_with_uid_defaults(
+fn reload_paths_core(
   system: &Path,
   explicit: Option<&Path>,
   matches: &Matches,
   uid_defaults: (u32, u32),
-) -> Result<(Settings, Vec<String>), Vec<String>> {
+  check_trust: bool,
+) -> Result<(Settings, Vec<Diagnostic>), Vec<Diagnostic>> {
   let mut settings = Settings {
     uid_defaults,
     ..Settings::default()
   };
   let mut warnings = Vec::new();
 
-  if !load_optional_strict(system, &mut settings, &mut warnings) {
+  if !load_optional_strict(system, &mut settings, &mut warnings, check_trust) {
     return Err(warnings);
   }
   if let Some(path) = explicit
-    && !load_required(path, &mut settings, &mut warnings)
+    && !load_required(path, &mut settings, &mut warnings, check_trust)
   {
     return Err(warnings);
   }
@@ -224,7 +425,7 @@ fn reload_paths_with_uid_defaults(
   apply_layer(
     &mut settings,
     cli_layer(matches, &mut warnings),
-    "command line",
+    LayerContext::CommandLine,
     &mut warnings,
   );
   Ok((settings, warnings))
@@ -268,16 +469,34 @@ pub fn check(matches: &Matches) -> bool {
   }
 }
 
-fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches) -> (Settings, Vec<String>) {
-  load_paths_with_uid_defaults(system, explicit, matches, read_uid_defaults(Path::new(LOGIN_DEFS)))
+#[cfg(test)]
+fn load_paths(system: Option<&Path>, explicit: Option<&Path>, matches: &Matches) -> (Settings, Vec<Diagnostic>) {
+  load_paths_core(
+    system,
+    explicit,
+    matches,
+    read_uid_defaults(Path::new(LOGIN_DEFS)),
+    false,
+  )
 }
 
+#[cfg(test)]
 fn load_paths_with_uid_defaults(
   system: Option<&Path>,
   explicit: Option<&Path>,
   matches: &Matches,
   uid_defaults: (u32, u32),
-) -> (Settings, Vec<String>) {
+) -> (Settings, Vec<Diagnostic>) {
+  load_paths_core(system, explicit, matches, uid_defaults, false)
+}
+
+fn load_paths_core(
+  system: Option<&Path>,
+  explicit: Option<&Path>,
+  matches: &Matches,
+  uid_defaults: (u32, u32),
+  check_trust: bool,
+) -> (Settings, Vec<Diagnostic>) {
   let mut settings = Settings {
     uid_defaults,
     ..Settings::default()
@@ -285,16 +504,16 @@ fn load_paths_with_uid_defaults(
   let mut warnings = Vec::new();
 
   if let Some(path) = system {
-    load_optional(path, &mut settings, &mut warnings);
+    load_optional(path, &mut settings, &mut warnings, check_trust);
   }
   if let Some(path) = explicit {
-    load_required(path, &mut settings, &mut warnings);
+    load_required(path, &mut settings, &mut warnings, check_trust);
   }
 
   apply_layer(
     &mut settings,
     cli_layer(matches, &mut warnings),
-    "command line",
+    LayerContext::CommandLine,
     &mut warnings,
   );
   (settings, warnings)
@@ -332,35 +551,111 @@ fn read_uid_defaults(path: &Path) -> (u32, u32) {
   }
 }
 
-fn load_optional(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) {
-  match path.try_exists() {
-    Ok(true) => {
-      load_required(path, settings, warnings);
+fn config_trust_message(uid: u32, mode: u32) -> Option<String> {
+  let permissions = mode & 0o7777;
+  let mut problems = Vec::new();
+  if uid != 0 {
+    problems.push(format!("owned by UID {uid} instead of root (UID 0)"));
+  }
+  if permissions & 0o022 != 0 {
+    problems.push(format!("writable by group or other users (mode {permissions:#06o})"));
+  }
+  (!problems.is_empty()).then(|| {
+    format!(
+      "{}; this file can select commands executed after authentication, so keep it root-owned and remove group/other write permissions",
+      problems.join(" and ")
+    )
+  })
+}
+
+fn warn_config_trust(path: &Path, warnings: &mut Vec<Diagnostic>) {
+  match fs::metadata(path) {
+    Ok(metadata) => {
+      if let Some(message) = config_trust_message(metadata.uid(), metadata.mode()) {
+        warnings.push(Diagnostic::file(
+          Severity::Warning,
+          "unsafe configuration ownership or permissions",
+          path,
+          None,
+          None,
+          None,
+          message,
+        ));
+      }
     },
-    Ok(false) => {},
-    Err(error) => warnings.push(format!("{}: cannot access configuration: {error}", path.display())),
+    Err(error) => warnings.push(Diagnostic::file(
+      Severity::Warning,
+      "cannot verify configuration ownership or permissions",
+      path,
+      None,
+      None,
+      None,
+      error.to_string(),
+    )),
   }
 }
 
-fn load_optional_strict(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) -> bool {
+fn load_optional(path: &Path, settings: &mut Settings, warnings: &mut Vec<Diagnostic>, check_trust: bool) {
   match path.try_exists() {
-    Ok(true) => load_required(path, settings, warnings),
+    Ok(true) => {
+      load_required(path, settings, warnings, check_trust);
+    },
+    Ok(false) => {},
+    Err(error) => warnings.push(Diagnostic::file(
+      Severity::Warning,
+      "cannot access configuration",
+      path,
+      None,
+      None,
+      None,
+      error.to_string(),
+    )),
+  }
+}
+
+fn load_optional_strict(
+  path: &Path,
+  settings: &mut Settings,
+  warnings: &mut Vec<Diagnostic>,
+  check_trust: bool,
+) -> bool {
+  match path.try_exists() {
+    Ok(true) => load_required(path, settings, warnings, check_trust),
     Ok(false) => true,
     Err(error) => {
-      warnings.push(format!("{}: cannot access configuration: {error}", path.display()));
+      warnings.push(Diagnostic::file(
+        Severity::Warning,
+        "cannot access configuration",
+        path,
+        None,
+        None,
+        None,
+        error.to_string(),
+      ));
       false
     },
   }
 }
 
-fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String>) -> bool {
+fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<Diagnostic>, check_trust: bool) -> bool {
   let content = match fs::read_to_string(path) {
     Ok(content) => content,
     Err(error) => {
-      warnings.push(format!("{}: cannot read configuration: {error}", path.display()));
+      warnings.push(Diagnostic::file(
+        Severity::Warning,
+        "cannot read configuration",
+        path,
+        None,
+        None,
+        None,
+        error.to_string(),
+      ));
       return false;
     },
   };
+  if check_trust {
+    warn_config_trust(path, warnings);
+  }
   let document = match content.parse::<Document<String>>() {
     Ok(document) => document,
     Err(error) => {
@@ -370,38 +665,23 @@ fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<String
   };
 
   let layer = toml_layer(&document, path, &content, warnings);
-  apply_layer(settings, layer, &path.display().to_string(), warnings);
+  apply_layer(settings, layer, LayerContext::File { path, source: &content }, warnings);
   true
 }
 
-fn toml_diagnostic(path: &Path, source: &str, error: &toml_edit::TomlError) -> String {
-  let Some(span) = error.span() else {
-    return format!("error: invalid TOML in {}: {}", path.display(), error.message());
-  };
-  source_diagnostic("error", "invalid TOML", path, source, span, error.message())
-}
-
-fn source_diagnostic(level: &str, title: &str, path: &Path, source: &str, span: Range<usize>, message: &str) -> String {
-  let offset = span.start.min(source.len());
-  let (line, column) = line_column(source, offset);
-  let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
-  let line_end = source[offset..].find('\n').map_or(source.len(), |index| offset + index);
-  let source_line = &source[line_start..line_end];
-  let underline_start = source[line_start..offset].chars().count();
-  let underline_end = span.end.min(line_end);
-  let underline_width = source[offset..underline_end].chars().count().max(1);
-  let gutter = line.to_string().len();
-
-  format!(
-    "{level}: {title}\n{space:>gutter$}--> {path}:{line}:{column}\n{space:>gutter$} |\n{line:>gutter$} | {source_line}\n{space:>gutter$} | {padding}{carets} {message}",
-    space = "",
-    path = path.display(),
-    padding = " ".repeat(underline_start),
-    carets = "^".repeat(underline_width),
+fn toml_diagnostic(path: &Path, source: &str, error: &toml_edit::TomlError) -> Diagnostic {
+  Diagnostic::file(
+    Severity::Error,
+    "invalid TOML",
+    path,
+    Some(source),
+    error.span(),
+    None,
+    error.message(),
   )
 }
 
-fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &mut Vec<String>) {
+fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>, warnings: &mut Vec<Diagnostic>) {
   macro_rules! apply {
     ($($field:ident),* $(,)?) => { $(if let Some(value) = layer.$field { settings.$field = value; })* };
   }
@@ -448,8 +728,10 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
   );
 
   if layer.issue == Some(true) && layer.greeting.as_ref().is_some_and(Option::is_some) {
-    warnings.push(format!(
-      "{source}: display.issue and display.greeting conflict; using the greeting"
+    warnings.push(context.warning(
+      layer.spans.display_identity.clone(),
+      Some("display.issue/display.greeting"),
+      "the fields conflict; using the greeting",
     ));
   }
   if layer.issue == Some(true) {
@@ -470,8 +752,12 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
   let effective_min = proposed_min.unwrap_or(settings.uid_defaults.0);
   let effective_max = proposed_max.unwrap_or(settings.uid_defaults.1);
   if effective_min > effective_max {
-    warnings.push(format!(
-      "{source}: users.min-uid exceeds users.max-uid after applying this layer ({effective_min} > {effective_max}); ignoring UID fields from this layer"
+    warnings.push(context.warning(
+      layer.spans.uid_range.clone(),
+      Some("users.min-uid/users.max-uid"),
+      format!(
+        "users.min-uid exceeds users.max-uid after applying this layer ({effective_min} > {effective_max}); ignoring UID fields from this layer"
+      ),
     ));
   } else {
     settings.min_uid = proposed_min;
@@ -481,16 +767,20 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
   let proposed_session = layer.remember_session.unwrap_or(settings.remember_session);
   let proposed_user_session = layer.remember_user_session.unwrap_or(settings.remember_user_session);
   if proposed_session && proposed_user_session {
-    warnings.push(format!(
-      "{source}: remember.session and remember.user-session cannot both be true; ignoring both fields from this layer"
+    warnings.push(context.warning(
+      layer.spans.remember_sessions.clone(),
+      Some("remember.session/remember.user-session"),
+      "the fields cannot both be true; ignoring both fields from this layer",
     ));
   } else {
     settings.remember_session = proposed_session;
     settings.remember_user_session = proposed_user_session;
   }
   if settings.remember_user_session && !settings.remember {
-    warnings.push(format!(
-      "{source}: remember.user-session requires remember.username; enabling remember.username"
+    warnings.push(context.warning(
+      layer.spans.remember_sessions.clone(),
+      Some("remember.user-session"),
+      "remember.user-session requires remember.username; enabling remember.username",
     ));
     settings.remember = true;
   }
@@ -503,9 +793,13 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
       layer.kb_power.unwrap_or(settings.kb_power),
     ];
     if keys[0] == keys[1] || keys[0] == keys[2] || keys[1] == keys[2] {
-      warnings.push(format!(
-        "{source}: duplicate keybindings in candidate (command=F{}, sessions=F{}, power=F{}); ignoring all keybinding fields from this layer",
-        keys[0], keys[1], keys[2]
+      warnings.push(context.warning(
+        layer.spans.keybindings.clone(),
+        Some("keybindings"),
+        format!(
+          "duplicate keybindings in candidate (command=F{}, sessions=F{}, power=F{}); ignoring all keybinding fields from this layer",
+          keys[0], keys[1], keys[2]
+        ),
       ));
     } else {
       [settings.kb_command, settings.kb_sessions, settings.kb_power] = keys;
@@ -513,7 +807,7 @@ fn apply_layer(settings: &mut Settings, layer: Layer, source: &str, warnings: &m
   }
 }
 
-fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
+fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   let mut layer = Layer::default();
   let string = |name: &str| matches.opt_str(name);
   let flag = |name: &str| matches.opt_present(name).then_some(true);
@@ -525,9 +819,10 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.ipc_timeout = cli_number(matches, "ipc-timeout", 1, MAX_IPC_TIMEOUT, warnings);
   layer.command = string("cmd").map(optional_command);
   if matches.opt_present("allow-command-editor") && matches.opt_present("no-command-editor") {
-    warnings.push(
-      "command line: --allow-command-editor conflicts with --no-command-editor; keeping the editor disabled".into(),
-    );
+    warnings.push(Diagnostic::command_line(
+      Some("--allow-command-editor/--no-command-editor"),
+      "the options conflict with each other; keeping the editor disabled",
+    ));
   }
   layer.allow_command_editor = if matches.opt_present("no-command-editor") {
     Some(false)
@@ -535,7 +830,12 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
     flag("allow-command-editor")
   };
   if matches.opt_present("env") {
-    layer.environment = Some(valid_environment(matches.opt_strs("env"), "command line", warnings));
+    layer.environment = Some(valid_environment(
+      matches.opt_strs("env"),
+      LayerContext::CommandLine,
+      None,
+      warnings,
+    ));
   }
   layer.sessions = string("sessions").map(|value| split_paths(&value));
   layer.xsessions = string("xsessions").map(|value| split_paths(&value));
@@ -549,8 +849,9 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.issue = flag("issue");
   layer.greeting = string("greeting").map(Some);
   layer.time = flag("time");
-  layer.time_format =
-    string("time-format").and_then(|value| valid_time_format(&value, "--time-format", warnings).then_some(Some(value)));
+  layer.time_format = string("time-format").and_then(|value| {
+    valid_time_format(&value, LayerContext::CommandLine, None, "--time-format", warnings).then_some(Some(value))
+  });
   layer.refresh_rate = cli_number(matches, "refresh-rate", 1, MAX_REFRESH_RATE, warnings);
   layer.remember = flag("remember");
   layer.remember_session = flag("remember-session");
@@ -560,12 +861,15 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer.min_uid = cli_number::<u32>(matches, "user-menu-min-uid", 0, u32::MAX, warnings).map(Some);
   layer.max_uid = cli_number::<u32>(matches, "user-menu-max-uid", 0, u32::MAX, warnings).map(Some);
   if let Some(specification) = string("theme") {
-    layer.theme = parse_theme_layer(&specification, "command line --theme", warnings);
+    layer.theme = parse_theme_layer(&specification, LayerContext::CommandLine, None, "--theme", warnings);
   }
   layer.asterisks = flag("asterisks");
   if let Some(value) = string("asterisks-char") {
     if value.is_empty() {
-      warnings.push("command line: --asterisks-char is empty; ignoring it".into());
+      warnings.push(Diagnostic::command_line(
+        Some("--asterisks-char"),
+        "the value is empty; ignoring it",
+      ));
     } else {
       layer.asterisks_chars = Some(value);
     }
@@ -577,8 +881,9 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
     if matches!(value.as_str(), "left" | "center" | "right") {
       layer.greet_align = Some(value);
     } else {
-      warnings.push(format!(
-        "command line: invalid --greet-align '{value}'; expected left, center, or right"
+      warnings.push(Diagnostic::command_line(
+        Some("--greet-align"),
+        format!("invalid value '{value}'; expected left, center, or right"),
       ));
     }
   }
@@ -596,18 +901,21 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<String>) -> Layer {
   layer
 }
 
-fn cli_power_command(matches: &Matches, name: &str, warnings: &mut Vec<String>) -> Option<PowerCommand> {
+fn cli_power_command(matches: &Matches, name: &str, warnings: &mut Vec<Diagnostic>) -> Option<PowerCommand> {
   let value = matches.opt_str(name)?;
   match CommandLine::parse(&value) {
     Ok(command) => Some(PowerCommand::Explicit(command)),
     Err(error) => {
-      warnings.push(format!("command line: invalid --{name} value: {error}; ignoring it"));
+      warnings.push(Diagnostic::command_line(
+        Some(&format!("--{name}")),
+        format!("invalid value: {error}; ignoring it"),
+      ));
       None
     },
   }
 }
 
-fn cli_number<T>(matches: &Matches, name: &str, min: T, max: T, warnings: &mut Vec<String>) -> Option<T>
+fn cli_number<T>(matches: &Matches, name: &str, min: T, max: T, warnings: &mut Vec<Diagnostic>) -> Option<T>
 where
   T: std::str::FromStr + PartialOrd + Copy + std::fmt::Display,
 {
@@ -615,15 +923,16 @@ where
   match value.parse::<T>() {
     Ok(parsed) if parsed >= min && parsed <= max => Some(parsed),
     _ => {
-      warnings.push(format!(
-        "command line: invalid --{name} '{value}'; expected {min}..={max}"
+      warnings.push(Diagnostic::command_line(
+        Some(&format!("--{name}")),
+        format!("invalid value '{value}'; expected {min}..={max}"),
       ));
       None
     },
   }
 }
 
-fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: &mut Vec<String>) -> Layer {
+fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: &mut Vec<Diagnostic>) -> Layer {
   const ROOT: &[&str] = &[
     "general",
     "session",
@@ -674,8 +983,14 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     warn_unknown(table, KEYS, path, source, warnings, "session");
     layer.command = read_optional_command(table, "command", path, source, warnings, "session");
     layer.allow_command_editor = read_bool(table, "allow-command-editor", path, source, warnings, "session");
-    layer.environment = read_strings(table, "environment", path, source, warnings, "session")
-      .map(|values| valid_environment(values, &path.display().to_string(), warnings));
+    layer.environment = read_strings(table, "environment", path, source, warnings, "session").map(|values| {
+      valid_environment(
+        values,
+        LayerContext::File { path, source },
+        table.get("environment").and_then(Item::span),
+        warnings,
+      )
+    });
     layer.sessions = read_strings(table, "sessions", path, source, warnings, "session");
     layer.xsessions = read_strings(table, "xsessions", path, source, warnings, "session");
     layer.session_wrapper = read_optional_command(table, "wrapper", path, source, warnings, "session");
@@ -691,6 +1006,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
       "refresh-rate",
       "theme",
     ];
+    layer.spans.display_identity = combined_item_span(table, &["issue", "greeting"]);
     warn_unknown(table, KEYS, path, source, warnings, "display");
     layer.width = read_u16(table, "width", (1, u16::MAX), path, source, warnings, "display");
     layer.issue = read_bool(table, "issue", path, source, warnings, "display");
@@ -699,7 +1015,14 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.time_format =
       read_optional_string(table, "time-format", path, source, warnings, "display").and_then(|value| {
         value.map_or(Some(None), |format| {
-          valid_time_format(&format, "display.time-format", warnings).then_some(Some(format))
+          valid_time_format(
+            &format,
+            LayerContext::File { path, source },
+            table.get("time-format").and_then(Item::span),
+            "display.time-format",
+            warnings,
+          )
+          .then_some(Some(format))
         })
       });
     layer.refresh_rate = read_u16(
@@ -712,10 +1035,17 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
       "display",
     );
     if let Some(specification) = read_string(table, "theme", path, source, warnings, "display") {
-      layer.theme = parse_theme_layer(&specification, "display.theme", warnings);
+      layer.theme = parse_theme_layer(
+        &specification,
+        LayerContext::File { path, source },
+        table.get("theme").and_then(Item::span),
+        "display.theme",
+        warnings,
+      );
     }
   }
   if let Some(table) = read_table(document.as_table(), "remember", path, source, warnings) {
+    layer.spans.remember_sessions = combined_item_span(table, &["username", "session", "user-session"]);
     warn_unknown(
       table,
       &["username", "session", "user-session"],
@@ -729,6 +1059,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.remember_user_session = read_bool(table, "user-session", path, source, warnings, "remember");
   }
   if let Some(table) = read_table(document.as_table(), "users", path, source, warnings) {
+    layer.spans.uid_range = combined_item_span(table, &["min-uid", "max-uid"]);
     warn_unknown(
       table,
       &["menu", "autocomplete", "min-uid", "max-uid"],
@@ -747,11 +1078,12 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.asterisks = read_bool(table, "asterisks", path, source, warnings, "secret");
     if let Some(value) = read_string(table, "characters", path, source, warnings, "secret") {
       if value.is_empty() {
-        warn_item(
+        warn_field_item(
           table.get("characters"),
           path,
           source,
           warnings,
+          "secret.characters",
           "secret.characters must not be empty",
         );
       } else {
@@ -777,12 +1109,13 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
       if matches!(value.as_str(), "left" | "center" | "right") {
         layer.greet_align = Some(value);
       } else {
-        warn_item(
+        warn_field_item(
           table.get("greet-align"),
           path,
           source,
           warnings,
-          "layout.greet-align must be left, center, or right",
+          "layout.greet-align",
+          "the value must be left, center, or right",
         );
       }
     }
@@ -797,6 +1130,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.power_setsid = read_bool(table, "setsid", path, source, warnings, "power");
   }
   if let Some(table) = read_table(document.as_table(), "keybindings", path, source, warnings) {
+    layer.spans.keybindings = combined_item_span(table, &["command", "sessions", "power"]);
     warn_unknown(
       table,
       &["command", "sessions", "power"],
@@ -835,24 +1169,38 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
   layer
 }
 
+fn combined_item_span(table: &Table, keys: &[&str]) -> Option<Range<usize>> {
+  keys
+    .iter()
+    .filter_map(|key| table.get(key).and_then(Item::span))
+    .reduce(|left, right| left.start.min(right.start)..left.end.max(right.end))
+}
+
 fn read_table<'a>(
   root: &'a Table,
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
 ) -> Option<&'a Table> {
   let item = root.get(key)?;
   match item.as_table() {
     Some(table) => Some(table),
     None => {
-      warn_item(Some(item), path, source, warnings, &format!("{key} must be a table"));
+      warn_field_item(Some(item), path, source, warnings, key, "the value must be a table");
       None
     },
   }
 }
 
-fn warn_unknown(table: &Table, allowed: &[&str], path: &Path, source: &str, warnings: &mut Vec<String>, prefix: &str) {
+fn warn_unknown(
+  table: &Table,
+  allowed: &[&str],
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<Diagnostic>,
+  prefix: &str,
+) {
   for (key, item) in table.iter() {
     if !allowed.contains(&key) {
       let field = if prefix.is_empty() {
@@ -865,6 +1213,7 @@ fn warn_unknown(table: &Table, allowed: &[&str], path: &Path, source: &str, warn
         path,
         source,
         warnings,
+        Some(&field),
         &format!("unknown field '{field}'; ignoring it"),
       );
     }
@@ -878,19 +1227,21 @@ macro_rules! scalar_reader {
       key: &str,
       path: &Path,
       source: &str,
-      warnings: &mut Vec<String>,
+      warnings: &mut Vec<Diagnostic>,
       prefix: &str,
     ) -> Option<$ty> {
       let item = table.get(key)?;
       match item.$method() {
         Some(value) => Some(value.into()),
         None => {
-          warn_item(
+          let field = format!("{prefix}.{key}");
+          warn_field_item(
             Some(item),
             path,
             source,
             warnings,
-            &format!("{prefix}.{key} must be {}", $expected),
+            &field,
+            &format!("the value must be {}", $expected),
           );
           None
         },
@@ -907,7 +1258,7 @@ fn read_optional_string(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
   prefix: &str,
 ) -> Option<Option<String>> {
   let value = read_string(table, key, path, source, warnings, prefix)?;
@@ -919,7 +1270,7 @@ fn read_optional_command(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
   prefix: &str,
 ) -> Option<Option<String>> {
   let value = read_string(table, key, path, source, warnings, prefix)?;
@@ -935,7 +1286,7 @@ fn read_power_command(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
 ) -> Option<PowerCommand> {
   let item = table.get(key)?;
   if item.as_bool() == Some(false) {
@@ -950,11 +1301,13 @@ fn read_power_command(
     match argv {
       Some(argv) => CommandLine::from_argv(argv),
       None => {
-        warn_item(
+        let field = format!("power.{key}");
+        warn_field_item(
           Some(item),
           path,
           source,
           warnings,
+          &field,
           &format!("power.{key} must contain only strings"),
         );
         return None;
@@ -963,11 +1316,13 @@ fn read_power_command(
   } else if let Some(value) = item.as_str() {
     CommandLine::parse(value)
   } else {
-    warn_item(
+    let field = format!("power.{key}");
+    warn_field_item(
       Some(item),
       path,
       source,
       warnings,
+      &field,
       &format!("power.{key} must be an argument array, a legacy command string, or false"),
     );
     return None;
@@ -976,11 +1331,13 @@ fn read_power_command(
   match parsed {
     Ok(command) => Some(PowerCommand::Explicit(command)),
     Err(error) => {
-      warn_item(
+      let field = format!("power.{key}");
+      warn_field_item(
         Some(item),
         path,
         source,
         warnings,
+        &field,
         &format!("power.{key} is invalid: {error}; ignoring it"),
       );
       None
@@ -993,7 +1350,7 @@ fn read_string_or_false(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
   prefix: &str,
 ) -> Option<Option<String>> {
   let item = table.get(key)?;
@@ -1002,12 +1359,14 @@ fn read_string_or_false(
   } else if let Some(value) = item.as_str() {
     Some(optional_command(value.to_string()))
   } else {
-    warn_item(
+    let field = format!("{prefix}.{key}");
+    warn_field_item(
       Some(item),
       path,
       source,
       warnings,
-      &format!("{prefix}.{key} must be a command string or false"),
+      &field,
+      "the value must be a command string or false",
     );
     None
   }
@@ -1018,17 +1377,19 @@ fn read_strings(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
   prefix: &str,
 ) -> Option<Vec<String>> {
   let item = table.get(key)?;
+  let field = format!("{prefix}.{key}");
   let Some(array) = item.as_array() else {
-    warn_item(
+    warn_field_item(
       Some(item),
       path,
       source,
       warnings,
-      &format!("{prefix}.{key} must be an array of strings"),
+      &field,
+      "the value must be an array of strings",
     );
     return None;
   };
@@ -1037,12 +1398,13 @@ fn read_strings(
     if let Some(value) = value.as_str() {
       values.push(value.to_string());
     } else {
-      warn_item(
+      warn_field_item(
         Some(item),
         path,
         source,
         warnings,
-        &format!("{prefix}.{key} contains a non-string value; ignoring it"),
+        &field,
+        "the array contains a non-string value; ignoring it",
       );
     }
   }
@@ -1055,7 +1417,7 @@ fn read_integer(
   bounds: (u64, u64),
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
   prefix: &str,
 ) -> Option<u64> {
   let (min, max) = bounds;
@@ -1063,12 +1425,14 @@ fn read_integer(
   match item.as_integer().and_then(|value| u64::try_from(value).ok()) {
     Some(value) if (min..=max).contains(&value) => Some(value),
     _ => {
-      warn_item(
+      let field = format!("{prefix}.{key}");
+      warn_field_item(
         Some(item),
         path,
         source,
         warnings,
-        &format!("{prefix}.{key} must be an integer in {min}..={max}"),
+        &field,
+        &format!("the value must be an integer in {min}..={max}"),
       );
       None
     },
@@ -1083,7 +1447,7 @@ macro_rules! integer_reader {
       bounds: ($ty, $ty),
       path: &Path,
       source: &str,
-      warnings: &mut Vec<String>,
+      warnings: &mut Vec<Diagnostic>,
       prefix: &str,
     ) -> Option<$ty> {
       read_integer(
@@ -1108,20 +1472,39 @@ fn read_u32(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
   prefix: &str,
 ) -> Option<u32> {
   read_integer(table, key, (0, u64::from(u32::MAX)), path, source, warnings, prefix).map(|value| value as u32)
 }
 
-fn warn_item(item: Option<&Item>, path: &Path, source: &str, warnings: &mut Vec<String>, message: &str) {
-  warn_span(item.and_then(Item::span), path, source, warnings, message);
+fn warn_field_item(
+  item: Option<&Item>,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<Diagnostic>,
+  field: &str,
+  message: &str,
+) {
+  warn_span(item.and_then(Item::span), path, source, warnings, Some(field), message);
 }
 
-fn warn_span(span: Option<Range<usize>>, path: &Path, source: &str, warnings: &mut Vec<String>, message: &str) {
-  warnings.push(span.map_or_else(
-    || format!("warning: {message}\n  --> {}", path.display()),
-    |span| source_diagnostic("warning", "invalid configuration", path, source, span, message),
+fn warn_span(
+  span: Option<Range<usize>>,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<Diagnostic>,
+  field: Option<&str>,
+  message: &str,
+) {
+  warnings.push(Diagnostic::file(
+    Severity::Warning,
+    "invalid configuration",
+    path,
+    Some(source),
+    span,
+    field,
+    message,
   ));
 }
 
@@ -1137,24 +1520,43 @@ fn line_column(source: &str, offset: usize) -> (usize, usize) {
   (line, column)
 }
 
-fn valid_environment(values: Vec<String>, source: &str, warnings: &mut Vec<String>) -> Vec<String> {
+fn valid_environment(
+  values: Vec<String>,
+  context: LayerContext<'_>,
+  span: Option<Range<usize>>,
+  warnings: &mut Vec<Diagnostic>,
+) -> Vec<String> {
   values
     .into_iter()
     .filter(|value| {
       let valid = value.split_once('=').is_some_and(|(key, _)| !key.is_empty());
       if !valid {
-        warnings.push(format!("{source}: malformed environment entry '{value}'; ignoring it"));
+        let field = match context {
+          LayerContext::CommandLine => "--env",
+          LayerContext::File { .. } => "session.environment",
+        };
+        warnings.push(context.warning(
+          span.clone(),
+          Some(field),
+          format!("malformed environment entry '{value}'; ignoring it"),
+        ));
       }
       valid
     })
     .collect()
 }
 
-fn valid_time_format(format: &str, field: &str, warnings: &mut Vec<String>) -> bool {
+fn valid_time_format(
+  format: &str,
+  context: LayerContext<'_>,
+  span: Option<Range<usize>>,
+  field: &str,
+  warnings: &mut Vec<Diagnostic>,
+) -> bool {
   use chrono::format::{Item as ChronoItem, StrftimeItems};
 
   if StrftimeItems::new(format).any(|item| item == ChronoItem::Error) {
-    warnings.push(format!("invalid {field} value '{format}'; ignoring it"));
+    warnings.push(context.warning(span, Some(field), format!("invalid value '{format}'; ignoring it")));
     false
   } else {
     true
@@ -1170,42 +1572,54 @@ fn read_theme_color(
   key: &str,
   path: &Path,
   source: &str,
-  warnings: &mut Vec<String>,
+  warnings: &mut Vec<Diagnostic>,
 ) -> Option<ThemeColor> {
   let item = table.get(key)?;
   if item.as_bool() == Some(false) {
     return Some(ThemeColor::Clear);
   }
   let Some(value) = item.as_str() else {
-    warn_item(
+    let field = format!("theme.{key}");
+    warn_field_item(
       Some(item),
       path,
       source,
       warnings,
-      &format!("theme.{key} must be a color string or false"),
+      &field,
+      "the value must be a color string or false",
     );
     return None;
   };
   if valid_color(value) {
     Some(ThemeColor::Value(value.to_string()))
   } else {
-    warn_item(
+    let field = format!("theme.{key}");
+    warn_field_item(
       Some(item),
       path,
       source,
       warnings,
-      &format!("theme.{key} has invalid color '{value}'; ignoring it"),
+      &field,
+      &format!("invalid color '{value}'; ignoring it"),
     );
     None
   }
 }
 
-fn parse_theme_layer(specification: &str, source: &str, warnings: &mut Vec<String>) -> ThemeLayer {
+fn parse_theme_layer(
+  specification: &str,
+  context: LayerContext<'_>,
+  span: Option<Range<usize>>,
+  field: &str,
+  warnings: &mut Vec<Diagnostic>,
+) -> ThemeLayer {
   let mut theme = ThemeLayer::default();
   for directive in specification.split(';').filter(|directive| !directive.is_empty()) {
     let Some((key, value)) = directive.split_once('=') else {
-      warnings.push(format!(
-        "{source}: malformed theme directive '{directive}'; ignoring it"
+      warnings.push(context.warning(
+        span.clone(),
+        Some(field),
+        format!("malformed theme directive '{directive}'; ignoring it"),
       ));
       continue;
     };
@@ -1221,12 +1635,20 @@ fn parse_theme_layer(specification: &str, source: &str, warnings: &mut Vec<Strin
       "action" => &mut theme.action,
       "button" => &mut theme.button,
       _ => {
-        warnings.push(format!("{source}: unknown theme component '{key}'; ignoring it"));
+        warnings.push(context.warning(
+          span.clone(),
+          Some(field),
+          format!("unknown theme component '{key}'; ignoring it"),
+        ));
         continue;
       },
     };
     if !valid_color(value) {
-      warnings.push(format!("{source}: invalid color '{value}' for '{key}'; ignoring it"));
+      warnings.push(context.warning(
+        span.clone(),
+        Some(field),
+        format!("invalid color '{value}' for '{key}'; ignoring it"),
+      ));
       continue;
     }
     *destination = Some(ThemeColor::Value(value.to_string()));
@@ -1242,7 +1664,7 @@ fn split_paths(value: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-  use std::{fs, path::Path};
+  use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
   use ratatui::style::Color;
   use tempfile::tempdir;
@@ -1286,7 +1708,9 @@ mod tests {
     let (conflicting_cli, warnings) =
       load_paths(None, None, &matches(&["--allow-command-editor", "--no-command-editor"]));
     assert!(!conflicting_cli.allow_command_editor);
-    assert!(warnings.iter().any(|warning| warning.contains("conflicts")));
+    assert!(warnings.iter().any(|warning| {
+      warning.contains("--allow-command-editor/--no-command-editor") && warning.contains("conflict")
+    }));
   }
 
   #[test]
@@ -1489,6 +1913,28 @@ mod tests {
         .iter()
         .any(|warning| warning.contains("secret.characters must not be empty"))
     );
+    assert!(warnings.iter().all(|warning| !warning.contains("warning: warning:")));
+  }
+
+  #[test]
+  fn unsafe_configuration_permissions_warn_without_discarding_values() {
+    assert!(super::config_trust_message(0, 0o100644).is_none());
+    let message = super::config_trust_message(1000, 0o100664).unwrap();
+    assert!(message.contains("UID 1000"));
+    assert!(message.contains("mode 0o0664"));
+
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    write(&config, "[display]\ntime = true\n");
+    fs::set_permissions(&config, fs::Permissions::from_mode(0o666)).unwrap();
+
+    let (settings, warnings) = super::load_paths_core(Some(&config), None, &matches(&[]), (1000, 60000), true);
+
+    assert!(settings.time);
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("unsafe configuration ownership or permissions"));
+    assert!(warnings[0].contains("root-owned"));
+    assert!(warnings[0].contains("group/other write permissions"));
   }
 
   #[test]
@@ -1514,7 +1960,11 @@ mod tests {
     );
     assert!(settings.remember);
     assert!(settings.remember_user_session);
-    assert!(warnings.iter().any(|warning| warning.contains("min-uid exceeds")));
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("min-uid exceeds") && warning.contains("explicit.toml:2:"))
+    );
     assert!(warnings.iter().any(|warning| warning.contains("duplicate keybinding")));
   }
 
@@ -1680,11 +2130,9 @@ mod tests {
         .iter()
         .any(|warning| warning.contains("power.hibernate must be an argument array"))
     );
-    assert!(
-      warnings
-        .iter()
-        .any(|warning| warning.contains("command line: invalid --power-shutdown"))
-    );
+    assert!(warnings.iter().any(|warning| warning.contains("command line")
+      && warning.contains("--power-shutdown")
+      && warning.contains("invalid value")));
   }
 
   #[test]
@@ -1758,6 +2206,9 @@ mod tests {
 
     assert_eq!(settings.environment, ["A=B", "C=D=E"]);
     assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| warning.contains("session.environment")));
+    assert!(warnings.iter().all(|warning| warning.contains("config.toml:2:")));
+    assert!(warnings.iter().all(|warning| warning.contains("2 | environment =")));
   }
 
   #[test]
@@ -1773,7 +2224,15 @@ mod tests {
       &mut warnings,
     );
     let mut settings = super::Settings::default();
-    super::apply_layer(&mut settings, layer, "example", &mut warnings);
+    super::apply_layer(
+      &mut settings,
+      layer,
+      super::LayerContext::File {
+        path: Path::new("contrib/tuigreet.toml"),
+        source: include_str!("../contrib/tuigreet.toml"),
+      },
+      &mut warnings,
+    );
 
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(settings, super::Settings::default());

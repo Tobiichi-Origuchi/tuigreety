@@ -30,6 +30,7 @@ use tokio::sync::{RwLock, mpsc};
 pub use self::greeter::*;
 use self::{event::Events, ipc::Ipc};
 use crate::{
+  config::Diagnostic,
   terminal::{TerminalSession, TerminationSignals},
   watcher::{ConfigWatcher, WatchOutcome},
 };
@@ -364,7 +365,7 @@ fn format_power_duration(duration: Duration) -> String {
   }
 }
 
-fn report_reload_diagnostics(state: &str, diagnostics: &[String]) {
+fn report_reload_diagnostics(state: &str, diagnostics: &[Diagnostic]) {
   for diagnostic in diagnostics {
     eprintln!("tuigreet: configuration reload {state}:\n{diagnostic}");
     tracing::warn!("configuration reload {state}: {diagnostic}");

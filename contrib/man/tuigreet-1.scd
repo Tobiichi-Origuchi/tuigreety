@@ -215,6 +215,12 @@ Duplicate keys and duplicate table declarations are invalid TOML. A file with
 duplicates is rejected as a whole rather than applying an arbitrary occurrence.
 Use *--check-config* for source-context diagnostics without starting the greeter.
 
+Configuration can select commands run as the authenticated user or control
+system power. Active files are expected to be root-owned and not writable by
+their group or other users (normally *root:root 0644*). Unsafe ownership or mode
+is warned about without preventing ordinary startup; it makes *--check-config*
+exit unsuccessfully. Tuigreet never changes configuration permissions itself.
+
 The system and explicit configuration files are monitored and valid changes are
 applied automatically. Command-line options retain the highest priority. An
 unreadable or malformed update is rejected, preserving the last valid runtime

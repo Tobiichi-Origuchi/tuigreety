@@ -13,7 +13,7 @@ use zeroize::Zeroize;
 
 use crate::{
   cache::{CacheLoad, CacheState, CacheStore, RememberedSelection},
-  config::{self, Settings},
+  config::{self, Diagnostic, Settings},
   event::DEFAULT_REFRESH_RATE,
   info::{get_issue, get_sessions, get_users, session_paths},
   ipc::AuthState,
@@ -482,7 +482,7 @@ pub(crate) struct ReloadPlan {
   sessions: Option<DiscoveredSessions>,
   greeting: Option<Option<String>>,
   powers: Option<Vec<Power>>,
-  warnings: Vec<String>,
+  warnings: Vec<Diagnostic>,
 }
 
 pub(crate) struct DiscoveredSessions {
@@ -515,7 +515,7 @@ pub(crate) enum CacheReloadAction {
 
 pub(crate) struct ReloadApplied {
   pub refresh_rate: u16,
-  pub warnings: Vec<String>,
+  pub warnings: Vec<Diagnostic>,
   pub cache_action: Option<CacheReloadAction>,
   pub cancel_authentication: bool,
 }
@@ -525,12 +525,16 @@ impl ReloadPlan {
     let mut warnings = Vec::new();
 
     if settings.debug != snapshot.debug || settings.logfile != snapshot.logfile {
-      warnings.push("general.debug and general.log-file require a restart; keeping their current values".into());
+      warnings.push(Diagnostic::warning(
+        "general.debug and general.log-file require a restart; keeping their current values",
+      ));
       settings.debug = snapshot.debug;
       settings.logfile.clone_from(&snapshot.logfile);
     }
     if settings.mock != snapshot.mock {
-      warnings.push("general.mock requires a restart; keeping its current value".into());
+      warnings.push(Diagnostic::warning(
+        "general.mock requires a restart; keeping its current value",
+      ));
       settings.mock = snapshot.mock;
     }
 
@@ -1054,7 +1058,7 @@ impl Greeter {
 
     let (settings, warnings) = config::load_from(system_config, self.config());
     for warning in warnings {
-      eprintln!("tuigreet: warning: {warning}");
+      eprintln!("tuigreet: {warning}");
     }
     self.settings = settings.clone();
 

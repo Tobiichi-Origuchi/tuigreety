@@ -8,7 +8,11 @@ use std::{
 use getopts::Matches;
 use tokio::sync::mpsc as async_mpsc;
 
-use crate::{ReloadPlan, ReloadSnapshot, config};
+use crate::{
+  ReloadPlan,
+  ReloadSnapshot,
+  config::{self, Diagnostic},
+};
 
 struct ReloadRequest {
   revision: u64,
@@ -19,10 +23,10 @@ struct ReloadRequest {
 enum WorkerOutcome {
   Ready {
     plan: Box<ReloadPlan>,
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
   },
   Rejected {
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
   },
   Failed,
 }
@@ -37,10 +41,10 @@ type Prepare = dyn Fn(ReloadRequest) -> WorkerOutcome + Send + Sync + 'static;
 pub(crate) enum ReloadOutcome {
   Ready {
     plan: Box<ReloadPlan>,
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
   },
   Rejected {
-    warnings: Vec<String>,
+    warnings: Vec<Diagnostic>,
   },
   Failed,
   WorkerStopped,
