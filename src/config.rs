@@ -475,11 +475,13 @@ fn reload_paths_core(
     ..Settings::default()
   };
   let mut warnings = Vec::new();
+  let duplicate_explicit = explicit.is_some_and(|explicit| same_config_file(system, explicit));
 
   if !load_optional_strict(system, &mut settings, &mut warnings, check_trust) {
     return Err(warnings);
   }
   if let Some(path) = explicit
+    && !duplicate_explicit
     && !load_required(path, &mut settings, &mut warnings, check_trust)
   {
     return Err(warnings);
@@ -565,11 +567,16 @@ fn load_paths_core(
     ..Settings::default()
   };
   let mut warnings = Vec::new();
+  let duplicate_explicit = system
+    .zip(explicit)
+    .is_some_and(|(system, explicit)| same_config_file(system, explicit));
 
   if let Some(path) = system {
     load_optional(path, &mut settings, &mut warnings, check_trust);
   }
-  if let Some(path) = explicit {
+  if let Some(path) = explicit
+    && !duplicate_explicit
+  {
     load_required(path, &mut settings, &mut warnings, check_trust);
   }
 
@@ -580,6 +587,16 @@ fn load_paths_core(
     &mut warnings,
   );
   (settings, warnings)
+}
+
+fn same_config_file(left: &Path, right: &Path) -> bool {
+  if left == right {
+    return true;
+  }
+  match (fs::metadata(left), fs::metadata(right)) {
+    (Ok(left), Ok(right)) => left.dev() == right.dev() && left.ino() == right.ino(),
+    _ => false,
+  }
 }
 
 fn read_uid_defaults(path: &Path) -> (u32, u32) {
@@ -1658,7 +1675,7 @@ mod tests {
   use std::{
     collections::BTreeSet,
     fs,
-    os::unix::fs::PermissionsExt,
+    os::unix::fs::{PermissionsExt, symlink},
     path::Path,
   };
 
@@ -1731,6 +1748,22 @@ mod tests {
     assert!(settings.time);
     assert_eq!(settings.window_padding, 0);
     assert_eq!(settings.width, 80);
+  }
+
+  #[test]
+  fn the_same_configuration_file_is_applied_only_once() {
+    let dir = tempdir().unwrap();
+    let config = dir.path().join("config.toml");
+    let alias = dir.path().join("alias.toml");
+    write(&config, "[display]\ntime = true\nunknown = true\n");
+    symlink(&config, &alias).unwrap();
+
+    for explicit in [&config, &alias] {
+      let (settings, warnings) = load_paths(Some(&config), Some(explicit), &matches(&[]));
+      assert!(settings.time);
+      assert_eq!(warnings.len(), 1, "{warnings:?}");
+      assert!(warnings[0].contains("display.unknown"));
+    }
   }
 
   #[test]
