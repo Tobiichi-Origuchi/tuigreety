@@ -31,7 +31,7 @@ const DEFAULT_MIN_UID: u32 = 1000;
 const DEFAULT_MAX_UID: u32 = 60000;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
-const MAX_CONFIG_SIZE: usize = 1024 * 1024;
+pub(crate) const MAX_CONFIG_SIZE: usize = 1024 * 1024;
 
 const CONFIG_SECTIONS: &[&str] = &[
   "general",

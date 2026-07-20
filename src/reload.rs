@@ -1,7 +1,12 @@
 use std::{
   io,
   panic::{AssertUnwindSafe, catch_unwind},
-  sync::{Arc, mpsc},
+  sync::{
+    Arc,
+    Condvar,
+    Mutex,
+    atomic::{AtomicU64, Ordering},
+  },
   thread,
 };
 
@@ -54,10 +59,56 @@ pub(crate) enum ReloadOutcome {
 /// dedicated thread. New revisions may supersede old results, but NSS is never
 /// enumerated concurrently and the async UI runtime is never blocked on it.
 pub(crate) struct ReloadCoordinator {
-  requests: Option<mpsc::Sender<ReloadRequest>>,
-  results: async_mpsc::UnboundedReceiver<WorkerResult>,
+  requests: Option<Arc<RequestSlot>>,
+  results: async_mpsc::Receiver<WorkerResult>,
+  latest: Arc<AtomicU64>,
   latest_revision: u64,
   pending: bool,
+}
+
+#[derive(Default)]
+struct RequestState {
+  latest: Option<ReloadRequest>,
+  closed: bool,
+}
+
+#[derive(Default)]
+struct RequestSlot {
+  state: Mutex<RequestState>,
+  changed: Condvar,
+}
+
+impl RequestSlot {
+  fn replace(&self, request: ReloadRequest) -> Result<(), ()> {
+    let mut state = self.state.lock().map_err(|_| ())?;
+    if state.closed {
+      return Err(());
+    }
+    state.latest = Some(request);
+    self.changed.notify_one();
+    Ok(())
+  }
+
+  fn take(&self) -> Option<ReloadRequest> {
+    let mut state = self.state.lock().ok()?;
+    loop {
+      if let Some(request) = state.latest.take() {
+        return Some(request);
+      }
+      if state.closed {
+        return None;
+      }
+      state = self.changed.wait(state).ok()?;
+    }
+  }
+
+  fn close(&self) {
+    if let Ok(mut state) = self.state.lock() {
+      state.closed = true;
+      state.latest = None;
+      self.changed.notify_one();
+    }
+  }
 }
 
 impl ReloadCoordinator {
@@ -66,16 +117,20 @@ impl ReloadCoordinator {
   }
 
   fn with_prepare(prepare: Arc<Prepare>) -> io::Result<Self> {
-    let (request_tx, request_rx) = mpsc::channel::<ReloadRequest>();
-    let (result_tx, result_rx) = async_mpsc::unbounded_channel();
+    let requests = Arc::new(RequestSlot::default());
+    let latest = Arc::new(AtomicU64::new(0));
+    let (result_tx, result_rx) = async_mpsc::channel(1);
 
-    thread::Builder::new()
-      .name("tuigreet-config-reload".into())
-      .spawn(move || worker(request_rx, result_tx, prepare))?;
+    thread::Builder::new().name("tuigreet-config-reload".into()).spawn({
+      let requests = requests.clone();
+      let latest = latest.clone();
+      move || worker(requests, result_tx, latest, prepare)
+    })?;
 
     Ok(Self {
-      requests: Some(request_tx),
+      requests: Some(requests),
       results: result_rx,
+      latest,
       latest_revision: 0,
       pending: false,
     })
@@ -88,8 +143,9 @@ impl ReloadCoordinator {
       return Err("configuration reload worker is unavailable".into());
     };
 
+    self.latest.store(revision, Ordering::Release);
     requests
-      .send(ReloadRequest {
+      .replace(ReloadRequest {
         revision,
         config,
         snapshot,
@@ -125,22 +181,27 @@ impl ReloadCoordinator {
   }
 }
 
+impl Drop for ReloadCoordinator {
+  fn drop(&mut self) {
+    if let Some(requests) = self.requests.take() {
+      requests.close();
+    }
+  }
+}
+
 fn worker(
-  requests: mpsc::Receiver<ReloadRequest>,
-  results: async_mpsc::UnboundedSender<WorkerResult>,
+  requests: Arc<RequestSlot>,
+  results: async_mpsc::Sender<WorkerResult>,
+  latest: Arc<AtomicU64>,
   prepare: Arc<Prepare>,
 ) {
-  while let Ok(mut request) = requests.recv() {
-    // Coalesce queued edits before doing any I/O. A request that arrives while
-    // discovery is already running is still processed serially afterward; its
-    // revision makes the older result ineligible for application.
-    while let Ok(newer) = requests.try_recv() {
-      request = newer;
-    }
-
+  while let Some(request) = requests.take() {
     let revision = request.revision;
     let outcome = catch_unwind(AssertUnwindSafe(|| prepare(request))).unwrap_or(WorkerOutcome::Failed);
-    if results.send(WorkerResult { revision, outcome }).is_err() {
+    if revision != latest.load(Ordering::Acquire) {
+      continue;
+    }
+    if results.blocking_send(WorkerResult { revision, outcome }).is_err() {
       break;
     }
   }
