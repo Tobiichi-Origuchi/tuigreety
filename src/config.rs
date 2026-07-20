@@ -51,6 +51,7 @@ const SESSION_FIELDS: &[&str] = &[
 ];
 const DISPLAY_FIELDS: &[&str] = &[
   "width",
+  "title",
   "issue",
   "greeting",
   "time",
@@ -261,6 +262,19 @@ fn source_marker(source: &str, span: Range<usize>) -> SourceMarker {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ContainerTitle {
+  Hostname,
+  Custom(String),
+  Hidden,
+}
+
+impl Default for ContainerTitle {
+  fn default() -> Self {
+    Self::Hostname
+  }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Settings {
   pub debug: bool,
   pub logfile: String,
@@ -273,6 +287,7 @@ pub struct Settings {
   pub session_wrapper: Option<String>,
   pub xsession_wrapper: Option<String>,
   pub width: u16,
+  pub container_title: ContainerTitle,
   pub issue: bool,
   pub greeting: Option<String>,
   pub time: bool,
@@ -318,6 +333,7 @@ impl Default for Settings {
       session_wrapper: None,
       xsession_wrapper: Some(DEFAULT_XSESSION_WRAPPER.into()),
       width: 80,
+      container_title: ContainerTitle::Hostname,
       issue: false,
       greeting: None,
       time: false,
@@ -374,6 +390,7 @@ struct Layer {
   session_wrapper: Option<Option<String>>,
   xsession_wrapper: Option<Option<String>>,
   width: Option<u16>,
+  container_title: Option<ContainerTitle>,
   issue: Option<bool>,
   greeting: Option<Option<String>>,
   time: Option<bool>,
@@ -778,6 +795,7 @@ fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>,
     session_wrapper,
     xsession_wrapper,
     width,
+    container_title,
     time,
     time_format,
     refresh_rate,
@@ -915,6 +933,7 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
     string("xsession-wrapper").map(optional_command)
   };
   layer.width = cli_number(matches, "width", 1, u16::MAX, warnings);
+  layer.container_title = cli_container_title(matches, warnings);
   layer.issue = cli_bool(matches, "issue", "no-issue", warnings);
   layer.greeting = string("greeting").map(Some);
   layer.time = cli_bool(matches, "time", "no-time", warnings);
@@ -966,6 +985,37 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.kb_sessions = cli_number(matches, "kb-sessions", 1, 12, warnings);
   layer.kb_power = cli_number(matches, "kb-power", 1, 12, warnings);
   layer
+}
+
+fn cli_container_title(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Option<ContainerTitle> {
+  let custom = matches.opt_str("title");
+  let hostname = matches.opt_present("default-title");
+  let hidden = matches.opt_present("no-title");
+  let selected = usize::from(custom.is_some()) + usize::from(hostname) + usize::from(hidden);
+  if selected > 1 {
+    warnings.push(Diagnostic::command_line(
+      Some("--title/--default-title/--no-title"),
+      "the options conflict; --no-title, then --title, then --default-title take precedence",
+    ));
+  }
+
+  if hidden {
+    Some(ContainerTitle::Hidden)
+  } else if let Some(custom) = custom {
+    if custom.trim().is_empty() {
+      warnings.push(Diagnostic::command_line(
+        Some("--title"),
+        "the title must not be empty; ignoring it",
+      ));
+      None
+    } else {
+      Some(ContainerTitle::Custom(custom))
+    }
+  } else if hostname {
+    Some(ContainerTitle::Hostname)
+  } else {
+    None
+  }
 }
 
 fn cli_bool(matches: &Matches, enable: &str, disable: &str, warnings: &mut Vec<Diagnostic>) -> Option<bool> {
@@ -1058,6 +1108,7 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     layer.spans.display_identity = combined_item_span(table, &["issue", "greeting"]);
     warn_unknown(table, DISPLAY_FIELDS, path, source, warnings, "display");
     layer.width = read_u16(table, "width", (1, u16::MAX), path, source, warnings, "display");
+    layer.container_title = read_container_title(table, path, source, warnings);
     layer.issue = read_bool(table, "issue", path, source, warnings, "display");
     layer.greeting = read_optional_string(table, "greeting", path, source, warnings, "display");
     layer.time = read_bool(table, "time", path, source, warnings, "display");
@@ -1181,6 +1232,46 @@ fn toml_layer(document: &Document<String>, path: &Path, source: &str, warnings: 
     );
   }
   layer
+}
+
+fn read_container_title(
+  table: &Table,
+  path: &Path,
+  source: &str,
+  warnings: &mut Vec<Diagnostic>,
+) -> Option<ContainerTitle> {
+  let item = table.get("title")?;
+  if let Some(value) = item.as_bool() {
+    return Some(if value {
+      ContainerTitle::Hostname
+    } else {
+      ContainerTitle::Hidden
+    });
+  }
+  if let Some(value) = item.as_str() {
+    if !value.trim().is_empty() {
+      return Some(ContainerTitle::Custom(value.to_string()));
+    }
+    warn_field_item(
+      Some(item),
+      path,
+      source,
+      warnings,
+      "display.title",
+      "the custom title must not be empty; use false to hide it",
+    );
+    return None;
+  }
+
+  warn_field_item(
+    Some(item),
+    path,
+    source,
+    warnings,
+    "display.title",
+    "the value must be true, false, or a non-empty string",
+  );
+  None
 }
 
 fn combined_item_span(table: &Table, keys: &[&str]) -> Option<Range<usize>> {
@@ -1912,6 +2003,58 @@ mod tests {
   }
 
   #[test]
+  fn container_title_supports_hostname_custom_hidden_and_cli_replacement() {
+    let directory = tempdir().unwrap();
+    let system = directory.path().join("system.toml");
+    let explicit = directory.path().join("explicit.toml");
+    write(&system, "[display]\ntitle = 'System login'\n");
+    write(&explicit, "[display]\ntitle = false\n");
+
+    let (hidden, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(hidden.container_title, super::ContainerTitle::Hidden);
+
+    let (hostname, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&["--default-title"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(hostname.container_title, super::ContainerTitle::Hostname);
+
+    let (custom, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&["--title", "CLI login"]));
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert_eq!(
+      custom.container_title,
+      super::ContainerTitle::Custom("CLI login".into())
+    );
+
+    let (conflict, warnings) = load_paths(
+      Some(&system),
+      None,
+      &matches(&["--default-title", "--title", "ignored", "--no-title"]),
+    );
+    assert_eq!(conflict.container_title, super::ContainerTitle::Hidden);
+    assert_eq!(warnings.len(), 1);
+    assert!(warnings[0].contains("conflict"));
+  }
+
+  #[test]
+  fn invalid_container_titles_preserve_the_lower_layer() {
+    let directory = tempdir().unwrap();
+    let system = directory.path().join("system.toml");
+    let explicit = directory.path().join("explicit.toml");
+    write(&system, "[display]\ntitle = 'System login'\n");
+
+    for invalid in ["''", "[]"] {
+      write(&explicit, &format!("[display]\ntitle = {invalid}\n"));
+      let (settings, warnings) = load_paths(Some(&system), Some(&explicit), &matches(&[]));
+      assert_eq!(
+        settings.container_title,
+        super::ContainerTitle::Custom("System login".into())
+      );
+      assert_eq!(warnings.len(), 1);
+      assert!(warnings[0].contains("display.title"));
+    }
+  }
+
+  #[test]
   fn the_same_configuration_file_is_applied_only_once() {
     let dir = tempdir().unwrap();
     let config = dir.path().join("config.toml");
@@ -2475,6 +2618,7 @@ mod tests {
       session_wrapper: Some("dbus-run-session".into()),
       xsession_wrapper: Some("startx /usr/bin/env".into()),
       width: 80,
+      container_title: super::ContainerTitle::Hostname,
       issue: false,
       greeting: Some("Welcome".into()),
       time: false,

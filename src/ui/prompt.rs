@@ -14,6 +14,7 @@ use crate::{
   Greeter,
   Mode,
   SecretDisplay,
+  config::ContainerTitle,
   info::get_hostname,
   ui::{Frame, input, prompt_value, util::*},
 };
@@ -62,14 +63,21 @@ pub fn draw(greeter: &Greeter, f: &mut Frame, area: Rect) -> Option<(u16, u16)> 
 
   let frame = inset(container, container_padding);
 
-  let hostname = Span::from(titleize(&greeter.text.authenticate_title(&HOSTNAME)));
-  let block = Block::default()
-    .title(hostname)
-    .title_style(theme.of(&[Themed::Title]))
+  let mut block = Block::default()
     .style(theme.of(&[Themed::Container]))
     .borders(Borders::ALL)
     .border_type(BorderType::Plain)
     .border_style(theme.of(&[Themed::Border]));
+  let title = match &greeter.settings.container_title {
+    ContainerTitle::Hostname => Some(greeter.text.authenticate_title(&HOSTNAME)),
+    ContainerTitle::Custom(title) => Some(title.clone()),
+    ContainerTitle::Hidden => None,
+  };
+  if let Some(title) = title {
+    block = block
+      .title(Span::from(titleize(&title)))
+      .title_style(theme.of(&[Themed::Title]));
+  }
 
   f.render_widget(block, container);
 

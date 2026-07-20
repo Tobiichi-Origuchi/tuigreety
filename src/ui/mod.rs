@@ -462,6 +462,35 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn prompt_title_can_be_custom_or_hidden() {
+    let greeter = Arc::new(RwLock::new(Greeter::default()));
+    let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+
+    greeter.write().await.settings.container_title = crate::config::ContainerTitle::Custom("Custom login".into());
+    draw(greeter.clone(), &mut terminal, false).await.unwrap();
+    let rendered = terminal
+      .backend()
+      .buffer()
+      .content
+      .iter()
+      .map(Cell::symbol)
+      .collect::<String>();
+    assert!(rendered.contains("Custom login"));
+
+    greeter.write().await.settings.container_title = crate::config::ContainerTitle::Hidden;
+    draw(greeter, &mut terminal, false).await.unwrap();
+    let rendered = terminal
+      .backend()
+      .buffer()
+      .content
+      .iter()
+      .map(Cell::symbol)
+      .collect::<String>();
+    assert!(!rendered.contains("Custom login"));
+    assert!(!rendered.contains("Authenticate into"));
+  }
+
+  #[tokio::test]
   async fn issue_with_its_own_blank_line_has_one_row_before_username() {
     let mut greeter = Greeter::default();
     greeter.settings.width = 50;

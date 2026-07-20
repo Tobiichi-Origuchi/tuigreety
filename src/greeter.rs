@@ -947,6 +947,9 @@ impl Greeter {
     );
     opts.optflag("", "no-xsession-wrapper", "do not wrap commands for X11 sessions");
     opts.optopt("w", "width", "width of the main prompt (default: 80)", "WIDTH");
+    opts.optopt("", "title", "set a custom login prompt title", "TITLE");
+    opts.optflag("", "default-title", "use the hostname-based login prompt title");
+    opts.optflag("", "no-title", "hide the login prompt title");
     opts.optflag("i", "issue", "show the host's issue file");
     opts.optflag("", "no-issue", "do not show the host's issue file");
     opts.optopt("g", "greeting", "show custom text above login prompt", "GREETING");

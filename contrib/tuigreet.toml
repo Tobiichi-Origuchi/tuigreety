@@ -39,6 +39,9 @@
 [display]
 # Maximum width of the centered login prompt, in terminal columns.
 # width = 80
+# Login prompt title. true uses the hostname-based default, false hides it,
+# and a non-empty string supplies custom text.
+# title = true
 # Show /etc/issue above the prompt. Cannot be combined with greeting.
 # issue = false
 # Fixed text shown above the prompt (example). Cannot be combined with issue.

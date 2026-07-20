@@ -79,6 +79,15 @@ tuigreet - A graphical console greeter for greetd
 *-w, --width COLS*
 	Number of columns the main prompt area should take on the screen.
 
+*--title TITLE*
+	Use custom text for the login prompt title.
+
+*--default-title*
+	Use the default hostname-based login prompt title, overriding configuration.
+
+*--no-title*
+	Hide the login prompt title.
+
 *-i, --issue*
 	Print the content of */etc/issue* at the top of the prompt area.
 	Expansion is single-pass and supports the local agetty-compatible system,
