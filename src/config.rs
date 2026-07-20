@@ -1,15 +1,20 @@
 use std::{
+  collections::HashSet,
   env,
   fmt,
-  fs,
-  io::{self, Write},
+  fs::{self, OpenOptions},
+  io::{self, Read, Write},
   ops::Range,
-  os::unix::fs::MetadataExt,
+  os::{
+    fd::AsRawFd,
+    unix::fs::{MetadataExt, OpenOptionsExt},
+  },
   path::{Path, PathBuf},
   str::FromStr,
 };
 
 use getopts::Matches;
+use nix::fcntl::OFlag;
 use ratatui::style::Color;
 use toml_edit::{Document, Item, Table};
 
@@ -26,6 +31,7 @@ const DEFAULT_MIN_UID: u32 = 1000;
 const DEFAULT_MAX_UID: u32 = 60000;
 const DEFAULT_LOG_FILE: &str = "/tmp/tuigreet.log";
 const DEFAULT_XSESSION_WRAPPER: &str = "startx /usr/bin/env";
+const MAX_CONFIG_SIZE: usize = 1024 * 1024;
 
 const CONFIG_SECTIONS: &[&str] = &[
   "general",
@@ -735,31 +741,213 @@ fn config_trust_message(uid: u32, mode: u32) -> Option<String> {
   })
 }
 
-fn warn_config_trust(path: &Path, warnings: &mut Vec<Diagnostic>) {
-  match fs::metadata(path) {
-    Ok(metadata) => {
-      if let Some(message) = config_trust_message(metadata.uid(), metadata.mode()) {
-        warnings.push(Diagnostic::file(
-          Severity::Warning,
-          "unsafe configuration ownership or permissions",
-          path,
-          None,
-          None,
-          None,
-          message,
-        ));
-      }
-    },
-    Err(error) => warnings.push(Diagnostic::file(
+fn directory_trust_message(uid: u32, mode: u32) -> Option<String> {
+  let permissions = mode & 0o7777;
+  let mut problems = Vec::new();
+  if uid != 0 {
+    problems.push(format!("owned by UID {uid} instead of root (UID 0)"));
+  }
+
+  // Root-owned sticky directories such as /tmp do not let an unprivileged
+  // user replace a root-owned entry, so they are a safe path component.
+  let root_owned_sticky = is_root_owned_sticky(uid, mode);
+  if permissions & 0o022 != 0 && !root_owned_sticky {
+    problems.push(format!("writable by group or other users (mode {permissions:#06o})"));
+  }
+
+  (!problems.is_empty()).then(|| problems.join(" and "))
+}
+
+fn is_root_owned_sticky(uid: u32, mode: u32) -> bool {
+  uid == 0 && mode & 0o1000 != 0
+}
+
+fn warn_config_trust(path: &Path, metadata: &fs::Metadata, opened_path: Option<&Path>, warnings: &mut Vec<Diagnostic>) {
+  if let Some(message) = config_trust_message(metadata.uid(), metadata.mode()) {
+    warnings.push(Diagnostic::file(
       Severity::Warning,
-      "cannot verify configuration ownership or permissions",
+      "unsafe configuration ownership or permissions",
       path,
       None,
       None,
       None,
-      error.to_string(),
-    )),
+      message,
+    ));
   }
+
+  warn_config_path_trust(path, opened_path, warnings);
+}
+
+fn warn_config_path_trust(path: &Path, opened_path: Option<&Path>, warnings: &mut Vec<Diagnostic>) {
+  let lexical_path = if path.is_absolute() {
+    path.to_path_buf()
+  } else {
+    match env::current_dir() {
+      Ok(current) => current.join(path),
+      Err(error) => {
+        warnings.push(Diagnostic::file(
+          Severity::Warning,
+          "cannot verify configuration path ownership or permissions",
+          path,
+          None,
+          None,
+          None,
+          format!("cannot resolve the current directory: {error}"),
+        ));
+        return;
+      },
+    }
+  };
+
+  let mut paths = vec![lexical_path];
+  match opened_path {
+    Some(opened_path) if !paths.iter().any(|path| path == opened_path) => paths.push(opened_path.to_path_buf()),
+    Some(_) => {},
+    None => {
+      warnings.push(Diagnostic::file(
+        Severity::Warning,
+        "cannot verify configuration path ownership or permissions",
+        path,
+        None,
+        None,
+        None,
+        "cannot resolve the opened configuration target for ancestor checks",
+      ));
+    },
+  }
+
+  let mut seen = HashSet::new();
+  let mut seen_sticky_entries = HashSet::new();
+  let mut problems = Vec::new();
+  for candidate in paths {
+    for entry in candidate.ancestors() {
+      let Some(parent) = entry.parent() else {
+        continue;
+      };
+      let Ok(parent_metadata) = fs::metadata(parent) else {
+        continue;
+      };
+      if !is_root_owned_sticky(parent_metadata.uid(), parent_metadata.mode())
+        || !seen_sticky_entries.insert(entry.to_path_buf())
+      {
+        continue;
+      }
+      match fs::symlink_metadata(entry) {
+        Ok(metadata) if metadata.uid() != 0 => problems.push(format!(
+          "{} is owned by UID {} inside sticky directory {}",
+          entry.display(),
+          metadata.uid(),
+          parent.display()
+        )),
+        Ok(_) => {},
+        Err(error) => problems.push(format!(
+          "cannot inspect sticky-directory entry {}: {error}",
+          entry.display()
+        )),
+      }
+    }
+
+    let Some(parent) = candidate.parent() else {
+      continue;
+    };
+    for ancestor in parent.ancestors() {
+      match fs::metadata(ancestor) {
+        Ok(metadata) => {
+          if !metadata.file_type().is_dir() {
+            problems.push(format!("{} is not a directory", ancestor.display()));
+            continue;
+          }
+          if !seen.insert((metadata.dev(), metadata.ino())) {
+            continue;
+          }
+          if let Some(problem) = directory_trust_message(metadata.uid(), metadata.mode()) {
+            problems.push(format!("{} is {problem}", ancestor.display()));
+          }
+        },
+        Err(error) => problems.push(format!("cannot inspect {}: {error}", ancestor.display())),
+      }
+    }
+  }
+
+  if !problems.is_empty() {
+    warnings.push(Diagnostic::file(
+      Severity::Warning,
+      "unsafe configuration path ownership or permissions",
+      path,
+      None,
+      None,
+      None,
+      format!(
+        "{}; every ancestor directory must prevent unprivileged replacement of the active configuration path",
+        problems.join("; ")
+      ),
+    ));
+  }
+}
+
+#[derive(Debug)]
+struct OpenedConfig {
+  content: String,
+  metadata: fs::Metadata,
+  opened_path: Option<PathBuf>,
+}
+
+fn read_config_file(path: &Path) -> io::Result<OpenedConfig> {
+  // O_NONBLOCK prevents an explicit FIFO or device path from pinning startup.
+  // Symlinks intentionally remain supported and are checked after opening.
+  let mut file = OpenOptions::new()
+    .read(true)
+    .custom_flags((OFlag::O_NONBLOCK | OFlag::O_CLOEXEC | OFlag::O_NOCTTY).bits())
+    .open(path)?;
+  let initial_metadata = file.metadata()?;
+  if !initial_metadata.file_type().is_file() {
+    return Err(io::Error::new(
+      io::ErrorKind::InvalidData,
+      "configuration path is not a regular file",
+    ));
+  }
+  if initial_metadata.len() > MAX_CONFIG_SIZE as u64 {
+    return Err(config_too_large_error());
+  }
+
+  let mut bytes = Vec::with_capacity(initial_metadata.len() as usize);
+  (&mut file).take((MAX_CONFIG_SIZE + 1) as u64).read_to_end(&mut bytes)?;
+  if bytes.len() > MAX_CONFIG_SIZE {
+    return Err(config_too_large_error());
+  }
+
+  let metadata = file.metadata()?;
+  let opened_path = resolved_opened_path(&file, &metadata, path);
+  let content = String::from_utf8(bytes).map_err(|error| {
+    io::Error::new(
+      io::ErrorKind::InvalidData,
+      format!("configuration is not valid UTF-8: {}", error.utf8_error()),
+    )
+  })?;
+
+  Ok(OpenedConfig {
+    content,
+    metadata,
+    opened_path,
+  })
+}
+
+fn config_too_large_error() -> io::Error {
+  io::Error::new(
+    io::ErrorKind::InvalidData,
+    format!("configuration exceeds the {MAX_CONFIG_SIZE}-byte size limit"),
+  )
+}
+
+fn resolved_opened_path(file: &fs::File, metadata: &fs::Metadata, original: &Path) -> Option<PathBuf> {
+  let proc_path = PathBuf::from("/proc/self/fd").join(file.as_raw_fd().to_string());
+  [fs::read_link(proc_path).ok(), fs::canonicalize(original).ok()]
+    .into_iter()
+    .flatten()
+    .find(|candidate| {
+      fs::metadata(candidate)
+        .is_ok_and(|candidate| candidate.dev() == metadata.dev() && candidate.ino() == metadata.ino())
+    })
 }
 
 fn load_optional(path: &Path, settings: &mut Settings, warnings: &mut Vec<Diagnostic>, check_trust: bool) {
@@ -805,8 +993,8 @@ fn load_optional_strict(
 }
 
 fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<Diagnostic>, check_trust: bool) -> bool {
-  let content = match fs::read_to_string(path) {
-    Ok(content) => content,
+  let loaded = match read_config_file(path) {
+    Ok(loaded) => loaded,
     Err(error) => {
       warnings.push(Diagnostic::file(
         Severity::Warning,
@@ -821,8 +1009,9 @@ fn load_required(path: &Path, settings: &mut Settings, warnings: &mut Vec<Diagno
     },
   };
   if check_trust {
-    warn_config_trust(path, warnings);
+    warn_config_trust(path, &loaded.metadata, loaded.opened_path.as_deref(), warnings);
   }
+  let content = loaded.content;
   let document = match content.parse::<Document<String>>() {
     Ok(document) => document,
     Err(error) => {
@@ -2001,8 +2190,13 @@ fn split_paths(value: &str) -> Vec<String> {
 mod tests {
   use std::{
     collections::BTreeSet,
+    ffi::CString,
     fs,
-    os::unix::fs::{PermissionsExt, symlink},
+    io,
+    os::unix::{
+      ffi::OsStrExt,
+      fs::{MetadataExt, PermissionsExt, symlink},
+    },
     path::Path,
   };
 
@@ -2597,6 +2791,10 @@ mod tests {
     let message = super::config_trust_message(1000, 0o100664).unwrap();
     assert!(message.contains("UID 1000"));
     assert!(message.contains("mode 0o0664"));
+    assert!(super::directory_trust_message(0, 0o040755).is_none());
+    assert!(super::directory_trust_message(0, 0o041777).is_none());
+    assert!(super::directory_trust_message(0, 0o040775).is_some());
+    assert!(super::directory_trust_message(1000, 0o040700).is_some());
 
     let dir = tempdir().unwrap();
     let config = dir.path().join("config.toml");
@@ -2606,10 +2804,64 @@ mod tests {
     let (settings, warnings) = super::load_paths_core(Some(&config), None, &matches(&[]), (1000, 60000), true);
 
     assert!(settings.time);
-    assert_eq!(warnings.len(), 1, "{warnings:?}");
-    assert!(warnings[0].contains("unsafe configuration ownership or permissions"));
-    assert!(warnings[0].contains("root-owned"));
-    assert!(warnings[0].contains("group/other write permissions"));
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("unsafe configuration ownership or permissions"))
+    );
+    assert!(warnings.iter().any(|warning| warning.contains("root-owned")));
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("group/other write permissions"))
+    );
+    assert!(
+      warnings
+        .iter()
+        .any(|warning| warning.contains("unsafe configuration path ownership or permissions"))
+    );
+  }
+
+  #[test]
+  fn configuration_reader_rejects_non_regular_and_oversized_files() {
+    let directory = tempdir().unwrap();
+    let (settings, warnings) = load_paths(Some(directory.path()), None, &matches(&[]));
+    assert_eq!(settings, super::Settings::default());
+    assert!(warnings.iter().any(|warning| warning.contains("not a regular file")));
+
+    let fifo = directory.path().join("config.fifo");
+    let fifo_path = CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    // SAFETY: fifo_path is a live, NUL-terminated pathname and mkfifo does not
+    // retain its pointer after returning.
+    let result = unsafe { nix::libc::mkfifo(fifo_path.as_ptr(), 0o600) };
+    assert_eq!(result, 0, "{}", io::Error::last_os_error());
+    let error = super::read_config_file(&fifo).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(error.to_string().contains("not a regular file"));
+
+    let oversized = directory.path().join("oversized.toml");
+    let file = fs::File::create(&oversized).unwrap();
+    file.set_len((super::MAX_CONFIG_SIZE + 1) as u64).unwrap();
+    let (settings, warnings) = load_paths(Some(&oversized), None, &matches(&[]));
+    assert_eq!(settings, super::Settings::default());
+    assert!(warnings.iter().any(|warning| warning.contains("size limit")));
+  }
+
+  #[test]
+  fn configuration_reader_follows_symlinks_but_reports_the_opened_inode() {
+    let directory = tempdir().unwrap();
+    let target = directory.path().join("target.toml");
+    let alias = directory.path().join("alias.toml");
+    write(&target, "[display]\ntime = true\n");
+    symlink(&target, &alias).unwrap();
+
+    let loaded = super::read_config_file(&alias).unwrap();
+    let target_metadata = fs::metadata(&target).unwrap();
+
+    assert!(loaded.content.contains("time = true"));
+    assert_eq!(loaded.metadata.dev(), target_metadata.dev());
+    assert_eq!(loaded.metadata.ino(), target_metadata.ino());
+    assert_eq!(loaded.opened_path.as_deref(), Some(target.as_path()));
   }
 
   #[test]

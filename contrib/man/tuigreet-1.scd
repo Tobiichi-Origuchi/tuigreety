@@ -317,9 +317,12 @@ Use *--check-config* for source-context diagnostics without starting the greeter
 
 Configuration can select commands run as the authenticated user or control
 system power. Active files are expected to be root-owned and not writable by
-their group or other users (normally *root:root 0644*). Unsafe ownership or mode
+their group or other users (normally *root:root 0644*), and every ancestor
+directory must prevent unprivileged path replacement. Unsafe ownership or mode
 is warned about without preventing ordinary startup; it makes *--check-config*
-exit unsuccessfully. Tuigreet never changes configuration permissions itself.
+exit unsuccessfully. Tuigreet never changes permissions itself. Configurations
+must be UTF-8 regular files no larger than 1 MiB. Symlinks remain supported,
+with both the selected path and opened target checked.
 
 The system and explicit configuration files are monitored and valid changes are
 applied automatically. Command-line options retain the highest priority. An

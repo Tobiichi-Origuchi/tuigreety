@@ -5,7 +5,8 @@
 # Changes are reloaded automatically; CLI options still take priority.
 # Validate this file with: tuigreet --check-config
 # Install active configuration as root:root 0644. It can select commands run
-# after authentication, so it must not be writable by the greeter or other users.
+# after authentication, so neither it nor its path may be replaceable by the
+# greeter or other users. The file must be regular UTF-8 and no larger than 1 MiB.
 
 [general]
 # Write debug logs. Changing this while running requires a restart.
