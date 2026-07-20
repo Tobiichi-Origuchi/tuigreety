@@ -170,12 +170,25 @@ pub fn get_greeting_height(greeter: &Greeter, width: u16, fallback: u16) -> (Opt
     if width == 0 {
       return (Some(paragraph), 0);
     }
-    let height = paragraph.line_count(width).saturating_add(1);
+    // Reserve one visual separator below ordinary greeting text. Traditional
+    // issue files already end in a blank line (`...\n\n`), so adding another
+    // row here would double-space the username prompt.
+    let separator = u16::from(!has_trailing_blank_line(greeting));
+    let height = paragraph.line_count(width).saturating_add(usize::from(separator));
 
     (Some(paragraph), u16::try_from(height).unwrap_or(u16::MAX))
   } else {
     (None, fallback)
   }
+}
+
+fn has_trailing_blank_line(text: &str) -> bool {
+  let Some(before_last_newline) = text.strip_suffix('\n') else {
+    return false;
+  };
+  let before_last_newline = before_last_newline.strip_suffix('\r').unwrap_or(before_last_newline);
+
+  before_last_newline.ends_with('\n')
 }
 
 pub fn get_message_height(message: Option<&str>, width: u16) -> (Option<Paragraph<'_>>, u16) {
@@ -468,5 +481,29 @@ mod test {
 
     assert_eq!(text, Some(expected));
     assert_eq!(height, 3);
+  }
+
+  #[test]
+  fn issue_blank_line_is_not_followed_by_an_extra_separator() {
+    let mut greeter = Greeter::default();
+    greeter.settings.width = 40;
+    greeter.settings.container_padding = 1;
+    greeter.greeting = Some("CachyOS 7.1.4-1-cachyos (tty1)\n\n".into());
+
+    let (_, height) = get_greeting_height(&greeter, 38, 0);
+
+    assert_eq!(height, 2);
+  }
+
+  #[test]
+  fn crlf_issue_blank_line_is_not_followed_by_an_extra_separator() {
+    let mut greeter = Greeter::default();
+    greeter.settings.width = 40;
+    greeter.settings.container_padding = 1;
+    greeter.greeting = Some("CachyOS\r\n\r\n".into());
+
+    let (_, height) = get_greeting_height(&greeter, 38, 0);
+
+    assert_eq!(height, 2);
   }
 }

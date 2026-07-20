@@ -78,6 +78,10 @@ tuigreet - A graphical console greeter for greetd
 
 *-i, --issue*
 	Print the content of */etc/issue* at the top of the prompt area.
+	Expansion is single-pass and supports the local agetty-compatible system,
+	os-release, date, time, TTY, user-count, backslash, and color escapes.
+	Unsupported escapes are displayed literally. An issue-provided final blank
+	line is not followed by an additional separator.
 
 	This option is mutually exclusive with *--greeting*.
 

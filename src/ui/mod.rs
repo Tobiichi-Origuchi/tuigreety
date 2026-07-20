@@ -462,6 +462,25 @@ mod tests {
   }
 
   #[tokio::test]
+  async fn issue_with_its_own_blank_line_has_one_row_before_username() {
+    let mut greeter = Greeter::default();
+    greeter.settings.width = 50;
+    greeter.settings.container_padding = 1;
+    greeter.greeting = Some("CachyOS 7.1.4-1-cachyos (tty1)\n\n".into());
+    let mut terminal = Terminal::new(TestBackend::new(60, 20)).unwrap();
+
+    draw(Arc::new(RwLock::new(greeter)), &mut terminal, false)
+      .await
+      .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let issue = row_containing(buffer, "CachyOS 7.1.4-1-cachyos (tty1)").expect("issue was not rendered");
+    let username = row_containing(buffer, "Username:").expect("username prompt was not rendered");
+
+    assert_eq!(username, issue.saturating_add(2));
+  }
+
+  #[tokio::test]
   async fn short_prompt_keeps_authentication_visible_and_shows_the_latest_feedback_line() {
     let mut greeter = Greeter::default();
     greeter.settings.width = 20;

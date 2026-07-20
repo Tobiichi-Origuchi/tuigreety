@@ -1,6 +1,6 @@
 use std::{
   borrow::Borrow,
-  collections::HashSet,
+  collections::{HashMap, HashSet},
   env,
   error::Error,
   ffi::{OsStr, OsString},
@@ -47,6 +47,7 @@ pub fn get_hostname() -> String {
 }
 
 pub fn get_issue() -> Option<String> {
+  let issue = fs::read_to_string("/etc/issue").ok()?;
   let (date, time) = {
     let now = Local::now();
 
@@ -56,56 +57,364 @@ pub fn get_issue() -> Option<String> {
     )
   };
 
-  let user_count = match UtmpParser::from_path("/var/run/utmp")
+  let user_count = UtmpParser::from_path("/var/run/utmp")
     .map(|utmp| {
-      utmp.into_iter().fold(0, |acc, entry| match entry {
-        Ok(UtmpEntry::UserProcess { .. }) => acc + 1,
-        Ok(UtmpEntry::LoginProcess { .. }) => acc + 1,
-        _ => acc,
-      })
+      utmp
+        .into_iter()
+        .filter(|entry| matches!(entry, Ok(UtmpEntry::UserProcess { .. })))
+        .count()
     })
-    .unwrap_or(0)
-  {
-    n if n < 2 => format!("{n} user"),
-    n => format!("{n} users"),
+    .unwrap_or(0);
+  let tty = tty_line(
+    env::var_os("XDG_VTNR").as_deref(),
+    nix::unistd::ttyname(io::stdin()).ok().as_deref(),
+  );
+  let uts = utsname::uname().ok();
+  let field = |value: Option<&OsStr>| {
+    value
+      .map(|value| value.to_string_lossy().into_owned())
+      .unwrap_or_default()
+  };
+  let system = IssueSystem {
+    date,
+    time,
+    user_count,
+    tty,
+    sysname: field(uts.as_ref().map(|uts| uts.sysname())),
+    release: field(uts.as_ref().map(|uts| uts.release())),
+    version: field(uts.as_ref().map(|uts| uts.version())),
+    nodename: field(uts.as_ref().map(|uts| uts.nodename())),
+    machine: field(uts.as_ref().map(|uts| uts.machine())),
+    domainname: field(uts.as_ref().map(|uts| uts.domainname())),
+    os_release: read_os_release(&[Path::new("/etc/os-release"), Path::new("/usr/lib/os-release")]),
   };
 
-  let vtnr: usize = env::var("XDG_VTNR")
-    .unwrap_or_else(|_| "0".to_string())
-    .parse()
-    .unwrap_or(0);
-  let uts = utsname::uname();
+  Some(expand_issue(&issue, &system))
+}
 
-  if let Ok(issue) = fs::read_to_string("/etc/issue") {
-    let issue = issue
-      .replace("\\S", "Linux")
-      .replace("\\l", &format!("tty{vtnr}"))
-      .replace("\\d", &date)
-      .replace("\\t", &time)
-      .replace("\\U", &user_count);
+#[derive(Debug, Default)]
+struct IssueSystem {
+  date: String,
+  time: String,
+  user_count: usize,
+  tty: String,
+  sysname: String,
+  release: String,
+  version: String,
+  nodename: String,
+  machine: String,
+  domainname: String,
+  os_release: HashMap<String, String>,
+}
 
-    let issue = match uts {
-      Ok(uts) => issue
-        .replace("\\s", uts.sysname().to_str().unwrap_or(""))
-        .replace("\\r", uts.release().to_str().unwrap_or(""))
-        .replace("\\v", uts.version().to_str().unwrap_or(""))
-        .replace("\\n", uts.nodename().to_str().unwrap_or(""))
-        .replace("\\m", uts.machine().to_str().unwrap_or(""))
-        .replace("\\o", uts.domainname().to_str().unwrap_or("")),
+fn tty_line(vtnr: Option<&OsStr>, tty: Option<&Path>) -> String {
+  if let Some(vtnr) = vtnr
+    .and_then(OsStr::to_str)
+    .and_then(|value| value.parse::<u32>().ok())
+    .filter(|value| *value > 0)
+  {
+    return format!("tty{vtnr}");
+  }
 
-      _ => issue,
+  tty
+    .and_then(|path| path.strip_prefix("/dev").ok())
+    .and_then(|path| path.to_str())
+    .map(|path| path.trim_start_matches('/').to_string())
+    .unwrap_or_default()
+}
+
+fn read_os_release(paths: &[&Path]) -> HashMap<String, String> {
+  for path in paths {
+    match fs::read_to_string(path) {
+      Ok(source) => return parse_os_release(&source),
+      Err(error) if error.kind() == io::ErrorKind::NotFound => {},
+      Err(_) => return HashMap::new(),
+    }
+  }
+
+  HashMap::new()
+}
+
+fn parse_os_release(source: &str) -> HashMap<String, String> {
+  let mut values = HashMap::new();
+
+  for line in source.lines() {
+    let line = line.trim();
+    if line.is_empty() || line.starts_with('#') {
+      continue;
+    }
+    let Some((key, raw_value)) = line.split_once('=') else {
+      continue;
+    };
+    if key.is_empty()
+      || !key
+        .bytes()
+        .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+      continue;
+    }
+    let Some(mut words) = shlex::split(raw_value) else {
+      continue;
+    };
+    if words.len() != 1 {
+      continue;
+    }
+
+    // os-release specifies that later duplicate assignments win, matching
+    // shell sourcing behavior.
+    values.insert(key.to_string(), words.pop().unwrap_or_default());
+  }
+
+  values
+}
+
+fn expand_issue(source: &str, system: &IssueSystem) -> String {
+  let mut output = String::with_capacity(source.len());
+  let mut chars = source.chars().peekable();
+
+  while let Some(character) = chars.next() {
+    if character != '\\' {
+      output.push(character);
+      continue;
+    }
+
+    let Some(escape) = chars.next() else {
+      output.push('\\');
+      break;
     };
 
-    return Some(
-      issue
-        .replace("\\x1b", "\x1b")
-        .replace("\\033", "\x1b")
-        .replace("\\e", "\x1b")
-        .replace(r"\\", r"\"),
-    );
+    match escape {
+      '\\' => output.push('\\'),
+      'd' => output.push_str(&system.date),
+      't' => output.push_str(&system.time),
+      'u' => output.push_str(&system.user_count.to_string()),
+      'U' => match system.user_count {
+        1 => output.push_str("1 user"),
+        count => output.push_str(&format!("{count} users")),
+      },
+      'l' => output.push_str(&system.tty),
+      's' => output.push_str(&system.sysname),
+      'r' => output.push_str(&system.release),
+      'v' => output.push_str(&system.version),
+      'n' => output.push_str(&system.nodename),
+      'm' => output.push_str(&system.machine),
+      'o' => output.push_str(&system.domainname),
+      'S' => {
+        if let Some(variable) = take_braced(&mut chars) {
+          if variable == "ANSI_COLOR" {
+            if let Some(color) = system.os_release.get(&variable).filter(|value| valid_sgr(value)) {
+              output.push_str("\x1b[");
+              output.push_str(color);
+              output.push('m');
+            }
+          } else if let Some(value) = system.os_release.get(&variable) {
+            output.push_str(value);
+          }
+        } else {
+          output.push_str(
+            system
+              .os_release
+              .get("PRETTY_NAME")
+              .filter(|value| !value.is_empty())
+              .map(String::as_str)
+              .unwrap_or(&system.sysname),
+          );
+        }
+      },
+      'e' => {
+        if let Some(name) = take_braced(&mut chars) {
+          output.push_str(named_escape(&name).unwrap_or_default());
+        } else {
+          output.push('\x1b');
+        }
+      },
+      '0' if take_exact(&mut chars, "33") => output.push('\x1b'),
+      'x' if take_exact(&mut chars, "1b") || take_exact(&mut chars, "1B") => output.push('\x1b'),
+      unsupported => {
+        // Unsupported agetty escapes stay visible instead of being silently
+        // reinterpreted or discarded.
+        output.push('\\');
+        output.push(unsupported);
+      },
+    }
+  }
+
+  output
+}
+
+fn take_exact(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, expected: &str) -> bool {
+  let mut candidate = chars.clone();
+  if expected.chars().all(|expected| candidate.next() == Some(expected)) {
+    *chars = candidate;
+    true
+  } else {
+    false
+  }
+}
+
+fn take_braced(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+  if chars.peek() != Some(&'{') {
+    return None;
+  }
+
+  let mut candidate = chars.clone();
+  candidate.next();
+  let mut value = String::new();
+  for character in candidate.by_ref() {
+    if character == '}' {
+      *chars = candidate;
+      return Some(value);
+    }
+    value.push(character);
   }
 
   None
+}
+
+fn valid_sgr(value: &str) -> bool {
+  !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit() || byte == b';')
+}
+
+fn named_escape(name: &str) -> Option<&'static str> {
+  Some(match name {
+    "black" => "\x1b[30m",
+    "blink" => "\x1b[5m",
+    "blue" => "\x1b[34m",
+    "bold" => "\x1b[1m",
+    "brown" => "\x1b[33m",
+    "cyan" => "\x1b[36m",
+    "darkgray" => "\x1b[1;30m",
+    "gray" | "lightgray" => "\x1b[37m",
+    "green" => "\x1b[32m",
+    "half-bright" | "halfbright" => "\x1b[2m",
+    "lightblue" => "\x1b[1;34m",
+    "lightcyan" => "\x1b[1;36m",
+    "lightgreen" => "\x1b[1;32m",
+    "lightmagenta" => "\x1b[1;35m",
+    "lightred" => "\x1b[1;31m",
+    "magenta" => "\x1b[35m",
+    "red" => "\x1b[31m",
+    "reset" => "\x1b[0m",
+    "reverse" => "\x1b[7m",
+    "yellow" => "\x1b[1;33m",
+    "white" => "\x1b[1;37m",
+    _ => return None,
+  })
+}
+
+#[cfg(test)]
+mod issue_tests {
+  use std::{collections::HashMap, ffi::OsStr, fs, path::Path};
+
+  use tempfile::tempdir;
+
+  use super::{IssueSystem, expand_issue, parse_os_release, read_os_release, tty_line};
+
+  fn system() -> IssueSystem {
+    IssueSystem {
+      date: "Sun Jul 20 2026".into(),
+      time: "14:30:00".into(),
+      user_count: 2,
+      tty: "tty1".into(),
+      sysname: "Linux".into(),
+      release: "7.1.4-1-cachyos".into(),
+      version: "#1 SMP PREEMPT_DYNAMIC".into(),
+      nodename: "host".into(),
+      machine: "x86_64".into(),
+      domainname: "localdomain".into(),
+      os_release: HashMap::from([
+        ("PRETTY_NAME".into(), "CachyOS".into()),
+        ("ANSI_COLOR".into(), "38;2;23;147;209".into()),
+      ]),
+    }
+  }
+
+  #[test]
+  fn expands_the_cachyos_issue_like_agetty() {
+    assert_eq!(
+      expand_issue("\\S{PRETTY_NAME} \\r (\\l)\n\n", &system()),
+      "CachyOS 7.1.4-1-cachyos (tty1)\n\n"
+    );
+  }
+
+  #[test]
+  fn expansion_is_single_pass_and_supports_the_documented_local_subset() {
+    let mut system = system();
+    system.os_release.insert("RECURSIVE".into(), r"name \r".into());
+    let source = concat!(
+      r"\S|\S{PRETTY_NAME}|\S{MISSING}|\S{RECURSIVE}|\\S{PRETTY_NAME}",
+      "\n",
+      r"\s|\r|\v|\n|\m|\o|\l|\d|\t|\u|\U",
+      "\n",
+      r"\e{red}red\e{reset}|\e|\033|\x1b|\q"
+    );
+
+    assert_eq!(
+      expand_issue(source, &system),
+      concat!(
+        "CachyOS|CachyOS||name \\r|\\S{PRETTY_NAME}\n",
+        "Linux|7.1.4-1-cachyos|#1 SMP PREEMPT_DYNAMIC|host|x86_64|localdomain|tty1|",
+        "Sun Jul 20 2026|14:30:00|2|2 users\n",
+        "\x1b[31mred\x1b[0m|\x1b|\x1b|\x1b|\\q"
+      )
+    );
+  }
+
+  #[test]
+  fn expands_os_release_ansi_color_only_as_sgr() {
+    let mut system = system();
+    assert_eq!(expand_issue(r"\S{ANSI_COLOR}", &system), "\x1b[38;2;23;147;209m");
+
+    system.os_release.insert("ANSI_COLOR".into(), "31mBAD".into());
+    assert_eq!(expand_issue(r"\S{ANSI_COLOR}", &system), "");
+  }
+
+  #[test]
+  fn os_release_parser_unquotes_values_and_uses_the_last_duplicate() {
+    let values = parse_os_release(
+      "# comment\nPRETTY_NAME=Old\nPRETTY_NAME=\"CachyOS Linux\"\nEMPTY=\"\"\nESCAPED=\"a \\\"quote\\\"\"\nBROKEN='unterminated\nTWO=words here\n",
+    );
+
+    assert_eq!(values.get("PRETTY_NAME").map(String::as_str), Some("CachyOS Linux"));
+    assert_eq!(values.get("EMPTY").map(String::as_str), Some(""));
+    assert_eq!(values.get("ESCAPED").map(String::as_str), Some("a \"quote\""));
+    assert!(!values.contains_key("BROKEN"));
+    assert!(!values.contains_key("TWO"));
+  }
+
+  #[test]
+  fn os_release_falls_back_only_when_the_etc_file_is_missing() {
+    let root = tempdir().unwrap();
+    let missing = root.path().join("etc-os-release");
+    let fallback = root.path().join("usr-lib-os-release");
+    fs::write(&fallback, "PRETTY_NAME=Fallback\n").unwrap();
+
+    assert_eq!(
+      read_os_release(&[&missing, &fallback])
+        .get("PRETTY_NAME")
+        .map(String::as_str),
+      Some("Fallback")
+    );
+
+    fs::write(&missing, "PRETTY_NAME=Preferred\n").unwrap();
+    assert_eq!(
+      read_os_release(&[&missing, &fallback])
+        .get("PRETTY_NAME")
+        .map(String::as_str),
+      Some("Preferred")
+    );
+  }
+
+  #[test]
+  fn tty_prefers_a_valid_vt_and_otherwise_uses_the_actual_device() {
+    assert_eq!(tty_line(Some(OsStr::new("7")), Some(Path::new("/dev/pts/3"))), "tty7");
+    assert_eq!(tty_line(Some(OsStr::new("0")), Some(Path::new("/dev/pts/3"))), "pts/3");
+    assert_eq!(
+      tty_line(Some(OsStr::new("invalid")), Some(Path::new("/dev/tty2"))),
+      "tty2"
+    );
+    assert_eq!(tty_line(None, None), "");
+  }
 }
 
 pub fn get_users(min_uid: u32, max_uid: u32) -> Vec<User> {

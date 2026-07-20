@@ -95,6 +95,8 @@ Options:
 
 The default configuration tends to be as minimal as possible, visually speaking, only showing the authentication prompts and some minor information in the status bar. You may print your system's `/etc/issue` at the top of the prompt with `--issue` and the current date and time with `--time` (and possibly customize it with `--time-format`). You may include a custom one-line greeting message instead of `/etc/issue` with `--greeting`.
 
+Issue expansion is single-pass and supports the local agetty-compatible escapes `\\`, `\d`, `\t`, `\u`, `\U`, `\l`, `\s`, `\r`, `\v`, `\n`, `\m`, `\o`, `\S`, `\S{VARIABLE}`, `\e`, and `\e{name}`. `\S` reads `PRETTY_NAME` from `/etc/os-release` (falling back to `/usr/lib/os-release` and then `\s`), while the braced form reads the named field. Legacy `\033` and `\x1b` color escapes remain accepted. Unsupported escapes are displayed literally. A final blank line already supplied by the issue file is used as the prompt separator rather than doubled.
+
 The initial prompt container will be 80 column wide. You may change this with `--width` in case you need more space (for example, to account for large PAM challenge messages). Please refer to usage information (`--help`) for more customization options. Various padding settings are available through the `*-padding` options.
 
 Debug logging appends only to a private (`0600`) regular file. Symbolic links,
