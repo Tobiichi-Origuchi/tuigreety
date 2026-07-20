@@ -18,6 +18,7 @@ Options:
                         120)
     -d, --debug [FILE]  enable debug logging to the provided file, or to
                         /tmp/tuigreet.log
+        --no-debug      disable debug logging, overriding configuration
     -c, --cmd COMMAND   command to run
         --allow-command-editor
                         allow unauthenticated users to replace the session
@@ -38,28 +39,39 @@ Options:
                         do not wrap commands for X11 sessions
     -w, --width WIDTH   width of the main prompt (default: 80)
     -i, --issue         show the host's issue file
+        --no-issue      do not show the host's issue file
     -g, --greeting GREETING
                         show custom text above login prompt
     -t, --time          display the current date and time
+        --no-time       do not display the current date and time
         --time-format FORMAT
                         custom strftime format for displaying date and time
         --refresh-rate FPS
                         screen refresh rate in frames per second (default: 2,
                         maximum: 240)
     -r, --remember      remember last logged-in username
+        --no-remember   do not remember the last logged-in username
         --remember-session
                         remember last selected session
+        --no-remember-session
+                        do not remember the last selected session
         --remember-user-session
                         remember last selected session for each user
+        --no-remember-user-session
+                        do not remember the last selected session for each user
         --user-menu     allow graphical selection of users from a menu
+        --no-user-menu  disable graphical user selection
         --user-autocomplete
                         allow Tab completion of usernames
+        --no-user-autocomplete
+                        disable Tab completion of usernames
         --user-menu-min-uid UID
                         minimum UID exposed by user menu or completion
         --user-menu-max-uid UID
                         maximum UID exposed by user menu or completion
         --theme THEME   define the application theme colors
         --asterisks     display asterisks when a secret is typed
+        --no-asterisks  hide typed secrets completely
         --asterisks-char CHARS
                         characters to be used to redact secrets (default: *)
         --window-padding PADDING
@@ -79,10 +91,13 @@ Options:
                         command to run to suspend the system
         --power-hibernate 'CMD [ARGS]...'
                         command to run to hibernate the system
+        --power-setsid  start power commands in a new session, overriding
+                        configuration
         --power-no-setsid
                         do not start power commands in a new session
         --mock          run without greetd and simulate authentication for
                         visual testing
+        --no-mock       require greetd, overriding mock configuration
         --kb-command [1-12]
                         F-key to use to open the command menu
         --kb-sessions [1-12]

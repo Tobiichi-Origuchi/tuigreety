@@ -36,6 +36,9 @@ tuigreet - A graphical console greeter for greetd
 	printed and startup continues without file logging. The path is not accessed
 	when debug logging is disabled.
 
+*--no-debug*
+	Disable debug logging, overriding the configuration file.
+
 *-c, --cmd CMD*
 	Specify which command to run on successful authentication. This can be
 	overridden by selecting an installed session within *tuigreet*.
@@ -85,6 +88,9 @@ tuigreet - A graphical console greeter for greetd
 
 	This option is mutually exclusive with *--greeting*.
 
+*--no-issue*
+	Do not show */etc/issue*, overriding the configuration file.
+
 *-g, --greeting GREETING*
 	Specify the text to be displayed at the top of the prompt area.
 
@@ -92,6 +98,9 @@ tuigreet - A graphical console greeter for greetd
 
 *-t, --time*
 	Print the current date and time at the top of the screen.
+
+*--no-time*
+	Do not display the current date and time, overriding the configuration file.
 
 *--time-format FORMAT*
 	Configure a custom strftime-compliant format string for the current date
@@ -104,11 +113,17 @@ tuigreet - A graphical console greeter for greetd
 *--user-menu*
 	Allow selecting a user from a graphical menu.
 
+*--no-user-menu*
+	Disable the graphical user menu, overriding the configuration file.
+
 *--user-autocomplete*
 	Allow Tab completion from the eligible local users. An empty field completes
 	only when exactly one eligible user exists. Otherwise, after at least one
 	character, unique matches are completed and ambiguous matches expand only
 	their common prefix. Disabled by default.
+
+*--no-user-autocomplete*
+	Disable username completion, overriding the configuration file.
 
 *--user-menu-min-uid UID*
 	Minimum UID exposed by the user menu or username completion.
@@ -120,13 +135,22 @@ tuigreet - A graphical console greeter for greetd
 	Remember the username of the last successfully opened session, so the
 	username field will be pre-filled on the next run.
 
+*--no-remember*
+	Do not remember the last username, overriding the configuration file.
+
 *--remember-session*
 	Remember the last session acknowledged as started by greetd. Authentication
 	failures and cancellations do not update the cache.
 
+*--no-remember-session*
+	Do not remember the global session selection, overriding the configuration file.
+
 *--remember-user-session*
 	Remember the last session acknowledged as started by greetd, per user
 	(requires *--remember*).
+
+*--no-remember-user-session*
+	Do not remember per-user session selections, overriding the configuration file.
 
 	Remembered values are stored atomically in a versioned state file under
 	*/var/cache/tuigreet*. The directory must be owned by the greeter user and
@@ -141,6 +165,9 @@ tuigreet - A graphical console greeter for greetd
 *--asterisks*
 	Add visual feedback when typing secrets, as one asterisk character for every
 	keystroke. By default, no feedback is given at all.
+
+*--no-asterisks*
+	Hide typed secrets completely, overriding the configuration file.
 
 *--asterisks-char CHARS*
 	Cycle through the configured non-empty character sequence when masking a
@@ -179,6 +206,10 @@ tuigreet - A graphical console greeter for greetd
 	and literal arguments, then executed directly without a shell. Shell expansion,
 	pipelines, redirection, and environment assignments are not interpreted.
 
+*--power-setsid*
+	Start power commands in a new session and process group, overriding a
+	configuration file that disabled isolation.
+
 *--power-no-setsid*
 	Do not start power commands in a new session and process group. By default,
 	tuigreet calls *setsid(2)* internally to detach them from the current TTY; it
@@ -192,6 +223,9 @@ tuigreet - A graphical console greeter for greetd
 *--mock*
 	Run without connecting to greetd and simulate authentication locally for
 	visual inspection. Power actions exit without changing system power state.
+
+*--no-mock*
+	Require a greetd connection, overriding mock mode in the configuration file.
 
 *--kb-command [1-12]*
 	Change the F-key used for the command editor. The binding is inactive unless

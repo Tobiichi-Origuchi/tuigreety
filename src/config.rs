@@ -890,25 +890,14 @@ fn apply_layer(settings: &mut Settings, layer: Layer, context: LayerContext<'_>,
 fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   let mut layer = Layer::default();
   let string = |name: &str| matches.opt_str(name);
-  let flag = |name: &str| matches.opt_present(name).then_some(true);
 
-  layer.debug = flag("debug");
+  layer.debug = cli_bool(matches, "debug", "no-debug", warnings);
   if let Some(path) = string("debug") {
     layer.logfile = Some(path);
   }
   layer.ipc_timeout = cli_number(matches, "ipc-timeout", 1, MAX_IPC_TIMEOUT, warnings);
   layer.command = string("cmd").map(optional_command);
-  if matches.opt_present("allow-command-editor") && matches.opt_present("no-command-editor") {
-    warnings.push(Diagnostic::command_line(
-      Some("--allow-command-editor/--no-command-editor"),
-      "the options conflict with each other; keeping the editor disabled",
-    ));
-  }
-  layer.allow_command_editor = if matches.opt_present("no-command-editor") {
-    Some(false)
-  } else {
-    flag("allow-command-editor")
-  };
+  layer.allow_command_editor = cli_bool(matches, "allow-command-editor", "no-command-editor", warnings);
   if matches.opt_present("env") {
     layer.environment = Some(valid_environment(
       matches.opt_strs("env"),
@@ -926,24 +915,24 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
     string("xsession-wrapper").map(optional_command)
   };
   layer.width = cli_number(matches, "width", 1, u16::MAX, warnings);
-  layer.issue = flag("issue");
+  layer.issue = cli_bool(matches, "issue", "no-issue", warnings);
   layer.greeting = string("greeting").map(Some);
-  layer.time = flag("time");
+  layer.time = cli_bool(matches, "time", "no-time", warnings);
   layer.time_format = string("time-format").and_then(|value| {
     valid_time_format(&value, LayerContext::CommandLine, None, "--time-format", warnings).then_some(Some(value))
   });
   layer.refresh_rate = cli_number(matches, "refresh-rate", 1, MAX_REFRESH_RATE, warnings);
-  layer.remember = flag("remember");
-  layer.remember_session = flag("remember-session");
-  layer.remember_user_session = flag("remember-user-session");
-  layer.user_menu = flag("user-menu");
-  layer.user_autocomplete = flag("user-autocomplete");
+  layer.remember = cli_bool(matches, "remember", "no-remember", warnings);
+  layer.remember_session = cli_bool(matches, "remember-session", "no-remember-session", warnings);
+  layer.remember_user_session = cli_bool(matches, "remember-user-session", "no-remember-user-session", warnings);
+  layer.user_menu = cli_bool(matches, "user-menu", "no-user-menu", warnings);
+  layer.user_autocomplete = cli_bool(matches, "user-autocomplete", "no-user-autocomplete", warnings);
   layer.min_uid = cli_number::<u32>(matches, "user-menu-min-uid", 0, u32::MAX, warnings).map(Some);
   layer.max_uid = cli_number::<u32>(matches, "user-menu-max-uid", 0, u32::MAX, warnings).map(Some);
   if let Some(specification) = string("theme") {
     layer.theme = parse_theme_layer(&specification, LayerContext::CommandLine, None, "--theme", warnings);
   }
-  layer.asterisks = flag("asterisks");
+  layer.asterisks = cli_bool(matches, "asterisks", "no-asterisks", warnings);
   if let Some(value) = string("asterisks-char") {
     if value.is_empty() {
       warnings.push(Diagnostic::command_line(
@@ -971,14 +960,31 @@ fn cli_layer(matches: &Matches, warnings: &mut Vec<Diagnostic>) -> Layer {
   layer.power_reboot = cli_power_command(matches, "power-reboot", warnings);
   layer.power_suspend = cli_power_command(matches, "power-suspend", warnings);
   layer.power_hibernate = cli_power_command(matches, "power-hibernate", warnings);
-  if matches.opt_present("power-no-setsid") {
-    layer.power_setsid = Some(false);
-  }
-  layer.mock = flag("mock");
+  layer.power_setsid = cli_bool(matches, "power-setsid", "power-no-setsid", warnings);
+  layer.mock = cli_bool(matches, "mock", "no-mock", warnings);
   layer.kb_command = cli_number(matches, "kb-command", 1, 12, warnings);
   layer.kb_sessions = cli_number(matches, "kb-sessions", 1, 12, warnings);
   layer.kb_power = cli_number(matches, "kb-power", 1, 12, warnings);
   layer
+}
+
+fn cli_bool(matches: &Matches, enable: &str, disable: &str, warnings: &mut Vec<Diagnostic>) -> Option<bool> {
+  let enabled = matches.opt_present(enable);
+  let disabled = matches.opt_present(disable);
+  if enabled && disabled {
+    warnings.push(Diagnostic::command_line(
+      Some(&format!("--{enable}/--{disable}")),
+      format!("the options conflict; --{disable} takes precedence"),
+    ));
+  }
+
+  if disabled {
+    Some(false)
+  } else if enabled {
+    Some(true)
+  } else {
+    None
+  }
 }
 
 fn cli_power_command(matches: &Matches, name: &str, warnings: &mut Vec<Diagnostic>) -> Option<PowerCommand> {
@@ -1724,6 +1730,88 @@ mod tests {
     assert!(warnings.iter().any(|warning| {
       warning.contains("--allow-command-editor/--no-command-editor") && warning.contains("conflict")
     }));
+  }
+
+  #[test]
+  fn paired_cli_booleans_override_configuration_in_both_directions() {
+    let dir = tempdir().unwrap();
+    let enabled = dir.path().join("enabled.toml");
+    write(
+      &enabled,
+      "[general]\ndebug = true\nmock = true\n\
+       [display]\nissue = true\ntime = true\n\
+       [remember]\nusername = true\nsession = true\n\
+       [users]\nmenu = true\nautocomplete = true\n\
+       [secret]\nasterisks = true\n\
+       [power]\nsetsid = false\n",
+    );
+    let (disabled, warnings) = load_paths(
+      Some(&enabled),
+      None,
+      &matches(&[
+        "--no-debug",
+        "--no-mock",
+        "--no-issue",
+        "--no-time",
+        "--no-remember",
+        "--no-remember-session",
+        "--no-user-menu",
+        "--no-user-autocomplete",
+        "--no-asterisks",
+        "--power-setsid",
+      ]),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!disabled.debug);
+    assert!(!disabled.mock);
+    assert!(!disabled.issue);
+    assert!(!disabled.time);
+    assert!(!disabled.remember);
+    assert!(!disabled.remember_session);
+    assert!(!disabled.user_menu);
+    assert!(!disabled.user_autocomplete);
+    assert!(!disabled.asterisks);
+    assert!(disabled.power_setsid);
+
+    let user_session = dir.path().join("user-session.toml");
+    write(&user_session, "[remember]\nusername = true\nuser-session = true\n");
+    let (disabled, warnings) = load_paths(
+      Some(&user_session),
+      None,
+      &matches(&["--no-remember", "--no-remember-user-session"]),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!disabled.remember);
+    assert!(!disabled.remember_user_session);
+
+    let disabled_file = dir.path().join("disabled.toml");
+    write(
+      &disabled_file,
+      "[general]\ndebug = false\nmock = false\n\
+       [display]\nissue = false\ntime = false\n\
+       [power]\nsetsid = true\n",
+    );
+    let (enabled, warnings) = load_paths(
+      Some(&disabled_file),
+      None,
+      &matches(&["--debug", "--mock", "--issue", "--time", "--power-no-setsid"]),
+    );
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(enabled.debug);
+    assert!(enabled.mock);
+    assert!(enabled.issue);
+    assert!(enabled.time);
+    assert!(!enabled.power_setsid);
+  }
+
+  #[test]
+  fn negative_cli_boolean_wins_a_reported_conflict() {
+    let (settings, warnings) = load_paths(None, None, &matches(&["--time", "--no-time", "--mock", "--no-mock"]));
+
+    assert!(!settings.time);
+    assert!(!settings.mock);
+    assert_eq!(warnings.len(), 2);
+    assert!(warnings.iter().all(|warning| warning.contains("takes precedence")));
   }
 
   #[test]

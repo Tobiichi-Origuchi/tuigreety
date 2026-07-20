@@ -913,6 +913,7 @@ impl Greeter {
       "enable debug logging to the provided file, or to /tmp/tuigreet.log",
       "FILE",
     );
+    opts.optflag("", "no-debug", "disable debug logging, overriding configuration");
     opts.optopt("c", "cmd", "command to run", "COMMAND");
     opts.optflag(
       "",
@@ -947,8 +948,10 @@ impl Greeter {
     opts.optflag("", "no-xsession-wrapper", "do not wrap commands for X11 sessions");
     opts.optopt("w", "width", "width of the main prompt (default: 80)", "WIDTH");
     opts.optflag("i", "issue", "show the host's issue file");
+    opts.optflag("", "no-issue", "do not show the host's issue file");
     opts.optopt("g", "greeting", "show custom text above login prompt", "GREETING");
     opts.optflag("t", "time", "display the current date and time");
+    opts.optflag("", "no-time", "do not display the current date and time");
     opts.optopt(
       "",
       "time-format",
@@ -962,14 +965,23 @@ impl Greeter {
       "FPS",
     );
     opts.optflag("r", "remember", "remember last logged-in username");
+    opts.optflag("", "no-remember", "do not remember the last logged-in username");
     opts.optflag("", "remember-session", "remember last selected session");
+    opts.optflag("", "no-remember-session", "do not remember the last selected session");
     opts.optflag(
       "",
       "remember-user-session",
       "remember last selected session for each user",
     );
+    opts.optflag(
+      "",
+      "no-remember-user-session",
+      "do not remember the last selected session for each user",
+    );
     opts.optflag("", "user-menu", "allow graphical selection of users from a menu");
+    opts.optflag("", "no-user-menu", "disable graphical user selection");
     opts.optflag("", "user-autocomplete", "allow Tab completion of usernames");
+    opts.optflag("", "no-user-autocomplete", "disable Tab completion of usernames");
     opts.optopt(
       "",
       "user-menu-min-uid",
@@ -984,6 +996,7 @@ impl Greeter {
     );
     opts.optopt("", "theme", "define the application theme colors", "THEME");
     opts.optflag("", "asterisks", "display asterisks when a secret is typed");
+    opts.optflag("", "no-asterisks", "hide typed secrets completely");
     opts.optopt(
       "",
       "asterisks-char",
@@ -1039,12 +1052,18 @@ impl Greeter {
       "command to run to hibernate the system",
       "'CMD [ARGS]...'",
     );
+    opts.optflag(
+      "",
+      "power-setsid",
+      "start power commands in a new session, overriding configuration",
+    );
     opts.optflag("", "power-no-setsid", "do not start power commands in a new session");
     opts.optflag(
       "",
       "mock",
       "run without greetd and simulate authentication for visual testing",
     );
+    opts.optflag("", "no-mock", "require greetd, overriding mock configuration");
 
     opts.optopt("", "kb-command", "F-key to use to open the command menu", "[1-12]");
     opts.optopt("", "kb-sessions", "F-key to use to open the sessions menu", "[1-12]");
