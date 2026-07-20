@@ -76,7 +76,9 @@ tuigreet - A graphical console greeter for greetd
 	default, Wayland sessions are fetched from */usr/share/wayland-sessions*.
 
 *--session-wrapper 'CMD [ARGS]...'*
-	Prepend a wrapper command to non-X11 session commands.
+	Prepend a generic wrapper command to non-X11 session commands. Multiple
+	arguments are supported; for example, *uwsm start --* wraps the selected
+	compositor without a dedicated integration mode.
 
 *-x, --xsessions DIR1[:DIR2]...*
 	Location of desktop-files to be used as X11 session definitions. By

@@ -37,6 +37,7 @@
 # xsessions = []
 # Command prepended to non-X11 sessions (example).
 # wrapper = "dbus-run-session"
+# For UWSM, use "uwsm start --" instead of a dedicated integration mode.
 # Command prepended to X11 sessions; false disables the wrapper.
 # xsession-wrapper = "startx /usr/bin/env"
 

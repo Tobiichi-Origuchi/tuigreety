@@ -16,6 +16,10 @@ Options:
         --ipc-timeout SECONDS
                         maximum seconds to wait for a greetd response (default:
                         120)
+    -q, --quiet         discard output from the launched session
+        --no-quiet      keep launched session output, overriding configuration
+        --numlock       enable Num Lock before showing the login prompt
+        --no-numlock    preserve the current Num Lock state
     -d, --debug [FILE]  enable debug logging to the provided file, or to
                         /tmp/tuigreet.log
         --no-debug      disable debug logging, overriding configuration
@@ -38,14 +42,23 @@ Options:
         --no-xsession-wrapper
                         do not wrap commands for X11 sessions
     -w, --width WIDTH   width of the main prompt (default: 80)
+        --title TITLE   set a custom login prompt title
+        --default-title use the hostname-based login prompt title
+        --no-title      hide the login prompt title
     -i, --issue         show the host's issue file
         --no-issue      do not show the host's issue file
     -g, --greeting GREETING
                         show custom text above login prompt
     -t, --time          display the current date and time
         --no-time       do not display the current date and time
+        --time-position POSITION
+                        place the time at top, bottom, or hide it
         --time-format FORMAT
                         custom strftime format for displaying date and time
+    -b, --battery       display the sampled battery percentage
+        --no-battery    hide the battery percentage
+        --battery-position SIDE
+                        place battery status on the left or right
         --refresh-rate FPS
                         screen refresh rate in frames per second (default: 2,
                         maximum: 240)
@@ -59,6 +72,8 @@ Options:
                         remember last selected session for each user
         --no-remember-user-session
                         do not remember the last selected session for each user
+    -u, --user USER     pre-fill an administrator-selected username
+        --no-user       clear a configured default username
         --user-menu     allow graphical selection of users from a menu
         --no-user-menu  disable graphical user selection
         --user-autocomplete
@@ -83,6 +98,16 @@ Options:
         --greet-align [left|center|right]
                         alignment of the greeting text in the main prompt
                         container (default: 'center')
+        --status-position POSITION
+                        place the status bar at top, bottom, or hide it
+        --status-reset / --no-status-reset
+        --status-command / --no-status-command
+        --status-sessions / --no-status-sessions
+        --status-power / --no-status-power
+        --status-selection / --no-status-selection
+        --status-caps-lock / --no-status-caps-lock
+        --status-config / --no-status-config
+                        show or hide individual responsive status items
         --power-shutdown 'CMD [ARGS]...'
                         command to run to shut down the system
         --power-reboot 'CMD [ARGS]...'
@@ -165,7 +190,15 @@ The `-git` package intentionally keeps stable AUR metadata while `pkgver()` reso
 
 Pre-built packages for x86_64, AArch64, i686, and ARMv7 can be found in the [releases](https://github.com/Tobiichi-Origuchi/tuigreety/releases) section of this repository. Each archive is a staged root filesystem containing `usr/bin/tuigreet`, the man page, project documentation, license and copyright notices, tmpfiles configuration, and `etc/tuigreet/config.toml`. It is not an installer and should not be unpacked blindly over `/`, because doing so could overwrite an existing login-manager configuration.
 
-Verify the adjacent SHA-256 file and the GitHub provenance attestation before installation. The included `usr/share/doc/tuigreety/INSTALL.md` gives exact commands and preserves an existing `/etc/tuigreet/config.toml`; the same instructions are available in [`contrib/release/INSTALL.md`](contrib/release/INSTALL.md). The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
+Verify the adjacent SHA-256 file and the GitHub/Sigstore provenance attestation before installation:
+
+```sh
+sha256sum --check tuigreety-VERSION-ARCH.tar.gz.sha256
+gh attestation verify tuigreety-VERSION-ARCH.tar.gz \
+  --repo Tobiichi-Origuchi/tuigreety
+```
+
+The attestation identifies the repository workflow and commit that produced the archive; release builds also compile every architecture twice in independent target directories and reject non-identical binaries. The included `usr/share/doc/tuigreety/INSTALL.md` preserves an existing `/etc/tuigreet/config.toml`; the same instructions are available in [`contrib/release/INSTALL.md`](contrib/release/INSTALL.md). The [tip prerelease](https://github.com/Tobiichi-Origuchi/tuigreety/releases/tag/tip) is continuously built and kept in sync with the `master` branch.
 
 ## Running the tests
 
@@ -196,7 +229,7 @@ TOML does not permit duplicate keys or duplicate table declarations. Such duplic
 
 Configuration can select commands that run as the authenticated user or control system power. Each active file is therefore expected to be owned by root and not writable by its group or other users (normally `root:root 0644`). Unsafe ownership or mode produces a non-fatal startup/reload warning and makes `--check-config` fail; tuigreet never changes the file automatically.
 
-The system configuration and an explicit configuration file, when selected, are monitored for changes. Valid updates are applied automatically, while command-line options retain the highest priority. An unreadable or malformed update is rejected and the last valid runtime configuration remains active. Changes to `general.debug`, `general.log-file`, and `general.mock` require a restart.
+The system configuration and an explicit configuration file, when selected, are monitored for changes. Valid updates are applied automatically, while command-line options retain the highest priority. An unreadable or malformed update is rejected and the last valid runtime configuration remains active. Changes to `general.debug`, `general.log-file`, `general.numlock`, and `general.mock` require a restart.
 
 See [`contrib/tuigreet.toml`](contrib/tuigreet.toml) for every supported field and its default. Arrays are used for session directories and environment entries, for example:
 
@@ -258,6 +291,8 @@ greetd supports both a command and environment entries in `StartSession`. `--env
 #### Common wrappers
 
 `--session-wrapper 'CMD [ARGS]...'` prepends a command to non-X11 sessions, while `--xsession-wrapper 'CMD [ARGS]...'` does the same for X11 sessions. For example, `--session-wrapper dbus-run-session` starts the selected session under `dbus-run-session`.
+
+The wrapper is intentionally generic and can contain several arguments. For example, `wrapper = "uwsm start --"` or `--session-wrapper 'uwsm start --'` passes the selected compositor command through UWSM. For full UWSM metadata, the [UWSM documentation](https://github.com/Vladimir-csp/uwsm#from-a-display-manager) recommends a dedicated Wayland Desktop Entry whose `Exec` references another entry, such as `Exec=uwsm start -- my-compositor.desktop`; this avoids duplicating UWSM's evolving session policy inside tuigreet.
 
 X11 sessions use `startx /usr/bin/env` by default. Set `xsession-wrapper = false` in TOML or pass `--no-xsession-wrapper` to disable it.
 
