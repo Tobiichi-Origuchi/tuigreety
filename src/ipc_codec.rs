@@ -4,6 +4,11 @@ use greetd_ipc::{Request, Response, codec::Error};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use zeroize::{Zeroize, Zeroizing};
 
+// Normal greetd traffic is tiny. This still leaves ample room for unusually
+// large PAM prompts and configured session environments while preventing a
+// malformed peer from forcing a multi-gigabyte allocation.
+const MAX_FRAME_SIZE: usize = 8 * 1024 * 1024;
+
 #[cfg(test)]
 type DropProbe = Box<dyn FnOnce(&Request) + Send>;
 
@@ -66,6 +71,11 @@ where
 {
   let mut counter = CountingWriter::default();
   serde_json::to_writer(&mut counter, request)?;
+  if counter.length > MAX_FRAME_SIZE {
+    return Err(Error::Serialization(format!(
+      "greetd request frame exceeds {MAX_FRAME_SIZE} bytes"
+    )));
+  }
   let length = u32::try_from(counter.length)
     .map_err(|_| Error::Serialization("greetd request exceeds the u32 frame length".into()))?;
 
@@ -93,7 +103,14 @@ where
       _ => error.into(),
     })?;
 
-  let mut body = Zeroizing::new(vec![0; u32::from_ne_bytes(length) as usize]);
+  let length = u32::from_ne_bytes(length) as usize;
+  if length > MAX_FRAME_SIZE {
+    return Err(Error::Serialization(format!(
+      "greetd response frame exceeds {MAX_FRAME_SIZE} bytes"
+    )));
+  }
+
+  let mut body = Zeroizing::new(vec![0; length]);
   stream.read_exact(&mut body).await?;
   Ok(serde_json::from_slice(&body)?)
 }
@@ -124,7 +141,7 @@ mod tests {
   use greetd_ipc::{ErrorType, Request, Response, codec::TokioCodec};
   use tokio::io::{AsyncWriteExt, duplex};
 
-  use super::{SensitiveRequest, read_response, write_request};
+  use super::{MAX_FRAME_SIZE, SensitiveRequest, read_response, write_request};
 
   #[test]
   fn sensitive_request_scrubs_its_response_before_drop_completes() {
@@ -198,5 +215,26 @@ mod tests {
         .to_string()
         .starts_with("i/o error:")
     );
+  }
+
+  #[tokio::test]
+  async fn oversized_response_is_rejected_before_reading_its_body() {
+    let (mut writer, mut reader) = duplex(64);
+    let oversized = u32::try_from(MAX_FRAME_SIZE + 1).unwrap();
+    writer.write_all(&oversized.to_ne_bytes()).await.unwrap();
+
+    let error = read_response(&mut reader).await.unwrap_err().to_string();
+    assert!(error.contains("greetd response frame exceeds"));
+  }
+
+  #[tokio::test]
+  async fn oversized_request_is_rejected_before_writing_its_frame() {
+    let (mut writer, _reader) = duplex(64);
+    let request = Request::PostAuthMessageResponse {
+      response: Some("x".repeat(MAX_FRAME_SIZE)),
+    };
+
+    let error = write_request(&request, &mut writer).await.unwrap_err().to_string();
+    assert!(error.contains("greetd request frame exceeds"));
   }
 }
