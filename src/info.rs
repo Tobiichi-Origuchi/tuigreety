@@ -6,14 +6,17 @@ use std::{
   ffi::{OsStr, OsString},
   fs,
   io,
-  os::{fd::AsRawFd, unix::fs::PermissionsExt},
+  os::fd::AsRawFd,
   path::{Path, PathBuf},
   sync::LazyLock,
 };
 
 use chrono::Local;
 use freedesktop_desktop_entry::{DesktopEntry, Line, parse_line};
-use nix::sys::utsname;
+use nix::{
+  sys::utsname,
+  unistd::{AccessFlags, eaccess},
+};
 use utmp_rs::{UtmpEntry, UtmpParser};
 use uzers::os::unix::UserExt;
 
@@ -759,11 +762,8 @@ fn desktop_bool(desktop: &DesktopEntry, key: &str) -> Result<bool, io::Error> {
 }
 
 fn try_exec_exists(command: &str) -> bool {
-  let is_executable = |path: &Path| {
-    path
-      .metadata()
-      .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-  };
+  let is_executable =
+    |path: &Path| path.metadata().is_ok_and(|metadata| metadata.is_file()) && eaccess(path, AccessFlags::X_OK).is_ok();
   let command = Path::new(command);
 
   if command.is_absolute() {
@@ -840,7 +840,14 @@ mod session_tests {
 
   use tempfile::tempdir;
 
-  use super::{effective_session_paths, get_sessions, load_desktop_file, validate_desktop_structure, xdg_data_dirs};
+  use super::{
+    effective_session_paths,
+    get_sessions,
+    load_desktop_file,
+    try_exec_exists,
+    validate_desktop_structure,
+    xdg_data_dirs,
+  };
   use crate::ui::sessions::SessionType;
 
   fn write_desktop(directory: &Path, name: &str, contents: &str) -> PathBuf {
@@ -961,6 +968,20 @@ mod session_tests {
 
     assert!(load_desktop_file(hidden, SessionType::Wayland).unwrap().is_none());
     assert!(load_desktop_file(missing, SessionType::Wayland).unwrap().is_none());
+  }
+
+  #[test]
+  fn try_exec_uses_the_current_process_access_identity() {
+    let root = tempdir().unwrap();
+    let executable = root.path().join("wrong-permission-class");
+    fs::write(&executable, "").unwrap();
+    fs::set_permissions(&executable, fs::Permissions::from_mode(0o001)).unwrap();
+
+    // Root may execute a regular file when any execute bit is set, so this
+    // permission-class distinction is meaningful only for ordinary greeters.
+    if nix::unistd::eaccess(&executable, nix::unistd::AccessFlags::X_OK).is_err() {
+      assert!(!try_exec_exists(executable.to_str().unwrap()));
+    }
   }
 
   #[test]
