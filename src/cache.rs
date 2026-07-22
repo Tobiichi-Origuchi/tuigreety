@@ -888,7 +888,7 @@ mod tests {
       fs::{PermissionsExt, symlink},
       net::UnixStream,
     },
-    sync::Arc,
+    sync::{Arc, Barrier},
     thread,
   };
 
@@ -1188,12 +1188,17 @@ mod tests {
 
   #[test]
   fn concurrent_updates_do_not_lose_user_entries() {
+    const WRITERS: usize = 4;
+
     let (_directory, store) = store();
     let store = Arc::new(store);
-    let threads = (0..16)
+    let barrier = Arc::new(Barrier::new(WRITERS));
+    let threads = (0..WRITERS)
       .map(|index| {
         let store = Arc::clone(&store);
+        let barrier = Arc::clone(&barrier);
         thread::spawn(move || {
+          barrier.wait();
           let username = format!("user-{index}");
           store
             .commit(CacheUpdate::successful_login(
@@ -1213,8 +1218,8 @@ mod tests {
     }
 
     let state = store.load(&[], true, true).state;
-    assert_eq!(state.user_selections.len(), 16);
-    for index in 0..16 {
+    assert_eq!(state.user_selections.len(), WRITERS);
+    for index in 0..WRITERS {
       assert_eq!(
         state.user_selection(&format!("user-{index}")).unwrap().command_value(),
         Some(format!("session-{index}").as_str())
